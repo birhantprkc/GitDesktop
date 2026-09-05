@@ -297,6 +297,13 @@ build-order lottery (tailwind-merge 3.6.0; in-repo: `data-open:animate-none!`).
   consume it in a `useLayoutEffect` keyed on the flipped state's commit
   (reference: `CommentComposer`'s collapse/expand pending flags); an rAF
   belongs inside that effect only to outlast Base UI's close-time focus-return.
+- A mode swap that unmounts the control holding focus (a toolbar cluster
+  swapping its controls) drops focus to `<body>` on the PALETTE route — the
+  palette closes-then-dispatches, so its focus-restore lands on the
+  about-to-unmount control. Rescue via `useFocusOnControlsSwap`
+  (`src/features/diff/use-hidden-trigger-focus.ts`): change-only by design so
+  a mount never steals focus; its sibling `useHiddenTriggerFocus` owns the
+  container-query-hidden-trigger close arm. Never a hand-rolled focus effect.
 
 ## Rust / Tauri conventions
 
