@@ -244,6 +244,20 @@ const SELECT_ITEM_BLOCK_TRUNCATE_RE = new RegExp(
   `<SelectItem\\b(?:(?!</SelectItem\\b)[\\s\\S]){0,${PAIR_GAP}}?\\bblock truncate\\b`,
   "g",
 );
+// The flex sibling of that dead span: a `min-w-0 flex-1 truncate` child, equally
+// inert unless the item ALSO carries a first-child shrink override — a pairing no
+// static pattern can see, so a legal site takes an allowlist entry. The window
+// doubles PAIR_GAP for headroom, which 160 alone would not give: the override
+// plus the item's own props already put the one live site 150 normalized chars
+// from its tag, and a site drifting past a bare-PAIR_GAP window would turn its
+// allowlist entry stale rather than report. Reach stays bounded by the tempered
+// `(?!</SelectItem\b)` step, which holds only while no SelectItem in src/ is
+// self-closing (grep-verified: 67 tags, 67 closers).
+const SELECT_ITEM_FLEX_TRUNCATE_RE = new RegExp(
+  `<SelectItem\\b(?:(?!</SelectItem\\b)[\\s\\S]){0,${PAIR_GAP * 2}}?` +
+    `\\bmin-w-0 flex-1 truncate\\b`,
+  "g",
+);
 
 // A `.mutate(` call in any spelling — the token, not the callbacks object it
 // may carry. Matching the object instead would have to recognize every way one
@@ -276,6 +290,37 @@ const DESTRUCTURED_MUTATE_RE = /\bconst\s*\{[^}]*\bmutate\b[^}]*\}\s*=/g;
 // the reverse order, and a suppression path with no state reset at all.
 const CONTEXT_MENU_SUPPRESS_RE =
   /\bset[A-Z]\w*\(\s*null\s*\)[^}]{0,160}?\.preventDefault\s*\(\s*\)/g;
+
+// The superseded disabled-trigger idiom: a reason exposed as `title` on a
+// wrapper around a popover/menu trigger whose control is natively disabled —
+// hover-only, because a disabled trigger leaves the tab order entirely, so
+// keyboard and assistive tech reach neither the control nor its reason.
+// Anchoring on the titled WRAPPER rather than on where `disabled` sits is what
+// lets one pattern cover both spellings the class shipped in (`disabled` on the
+// trigger, and `disabled` inside a plain `<Button/>` render element), and it is
+// what excludes the legitimate neighbours structurally instead of by name: a
+// titled span around a disabled Input or Switch carries no trigger tag, and a
+// menu SUB-trigger keeps its reason in its own label (a disabled item has no
+// room for a tooltip), so neither is ever wrapped in one. Sub/Submenu triggers
+// are excluded by name as well, pinning that idiom rather than resting on the
+// absence of a wrapper. Discriminating on a `Reason`-suffixed value instead
+// would miss the live sites whose hint is a bare conditional string rather than
+// a named reason (the discussions category menu, the branch trigger).
+// The tempered `(?!</)` steps hold the match inside one unclosed element chain,
+// so a titled span that already closed cannot pair with a later sibling's
+// trigger; the `DisabledReasonButton` step makes the FIXED composition
+// unmatchable even where a wrapper survives to carry layout classes. Both
+// windows are PAIR_GAP with ~1.4x headroom: across the live sites the widest
+// title→trigger run measures 113 normalized chars, the widest trigger→disabled
+// 84. Accepted evasions, all zero-instance today: a hint delivered by something
+// other than `title`, a wrapper that is a component rather than a tag, and a
+// `disabled` computed too far from the tag.
+const TITLED_TRIGGER_DISABLED_RE = new RegExp(
+  `title\\s*=(?:(?!</|DisabledReasonButton)[\\s\\S]){0,${PAIR_GAP}}?` +
+    `<(?![A-Za-z][\\w.]*Sub(?:menu)?Trigger\\b)[A-Za-z][\\w.]*Trigger\\b` +
+    `(?:(?!</|DisabledReasonButton)[\\s\\S]){0,${PAIR_GAP}}?\\bdisabled\\s*=`,
+  "g",
+);
 
 // Vendored shadcn/Base UI primitives are off-limits to edit (CLAUDE.md), so a
 // hit inside them could only ever be silenced by an allowlist entry, never
@@ -467,10 +512,18 @@ export const CHECKS = [
     scan: anyOf([
       perFile(SELECT_ITEM_CLIP_TITLE_RE),
       perFile(SELECT_ITEM_BLOCK_TRUNCATE_RE),
+      perFile(SELECT_ITEM_FLEX_TRUNCATE_RE),
     ]),
-    allowlist: [],
+    allowlist: [
+      // SelectControl's rich rows trip two arms, both false positives: the
+      // item-level first-child override lets the ItemText wrapper (a div under
+      // Base UI 1.7.0) shrink, which is what keeps the label's truncate live,
+      // and the clipTitle handler rides that same non-self-bounding label span —
+      // pairings the patterns cannot see.
+      "src/components/form/fields.tsx",
+    ],
     message:
-      "Select popup rows route their clip affordance through SelectClipText (src/components/select-clip-text.tsx) — an item-level clipTitle handler is dead once the row span self-bounds, and a bare `block truncate` child never engages under the shrink-refusing ItemText; if the pairing is a false positive (a self-bounded clip span inside a rich row — its own max-w keeps the handler live), add an allowlist entry with rationale",
+      "Select popup rows route their clip affordance through SelectClipText (src/components/select-clip-text.tsx) — an item-level clipTitle handler is dead once the row span self-bounds, and a bare `block truncate` or `min-w-0 flex-1 truncate` child never engages under the shrink-refusing ItemText; if the pairing is a false positive (a self-bounded clip span inside a rich row, or a row whose item overrides ItemText's shrink refusal), add an allowlist entry with rationale",
   },
   {
     name: "setQueryData-noop",
@@ -499,22 +552,43 @@ export const CHECKS = [
     // see a NEW site: the settings dialog's own sections (which unmount on BOTH
     // dialog close and every rail section switch — the keyed crossfade), Explore,
     // whose detail pane is keyed per repo, Actions, whose run detail is keyed per
-    // run and whose dispatch dialog unmounts with the repo view, and the
-    // repository + commit trees, whose panels ride <Activity>-hidden tabs and
-    // whose dialogs close mid-flight. The wider app is a separate tier: pulls/
-    // still carries per-call callback sites in bulk, so scanning it would report a
-    // backlog rather than a regression. Each tree joins this check on the change
-    // that converts it.
+    // run and whose dispatch dialog unmounts with the repo view, pulls, whose
+    // surfaces go through an `<Activity>` tab hide on every repo-tab switch,
+    // and the repository + commit trees, whose panels ride <Activity>-hidden
+    // tabs and whose dialogs close mid-flight. The wider app is a separate
+    // tier — issues/ and the smaller trees still carry per-call callback sites
+    // in bulk, so scanning them would report a backlog rather than a
+    // regression. Each tree joins this check on the change that converts it.
     appliesTo: (file) =>
       file.startsWith("src/features/repo-settings/") ||
       file.startsWith("src/features/explore/") ||
       file.startsWith("src/features/actions/") ||
+      file.startsWith("src/features/pulls/") ||
       file.startsWith("src/features/repository/") ||
       file.startsWith("src/features/commit/"),
     scan: anyOf([perLine(MUTATE_CALL_RE), perFile(DESTRUCTURED_MUTATE_RE)]),
-    allowlist: [],
+    // Every pulls entry is a call carrying NO per-call callbacks object, so
+    // there is nothing an unmount can drop; the token match is the ratchet, and
+    // an exemption is an entry here rather than a hole in the pattern.
+    allowlist: [
+      // Archive/unarchive, single-arg `update.mutate(vars)` — the deselect it
+      // pairs with is synchronous.
+      "src/features/pulls/LocalPrContextMenu.tsx",
+      // The local-conversation write-through and the approve toggle, both
+      // single-arg `update.mutate(vars)`.
+      "src/features/pulls/LocalPrView.tsx",
+      // The palette's archive action, single-arg `updateLocalPr.mutate(vars)`.
+      "src/features/pulls/PullRequestsPanel.tsx",
+      // GitLab time tracking's set-estimate and add-spent, both single-arg.
+      "src/features/pulls/RemotePrViewParts.tsx",
+      // Deleting one stored review, single-arg `del.mutate(id)`.
+      "src/features/pulls/ReviewHistory.tsx",
+      // Reconciles merged/deleted heads from an effect: the destructured
+      // `mutate` is called single-arg on both arms.
+      "src/features/pulls/useReconcileLocalPrs.ts",
+    ],
     message:
-      "react-query gates per-call mutation callbacks on the observer still having listeners, so a dialog close, a rail section switch, or a keyed pane remount mid-flight drops the toast, teardown, and navigation that lived in them — every mutation here awaits mutateAsync and puts its outcome in the continuation, so a bare .mutate( (or a `const { mutate }` destructure that reaches one) needs an allowlist entry with rationale",
+      "react-query gates per-call mutation callbacks on the observer still having listeners, so a dialog close, a rail section switch, an <Activity> tab hide, or a keyed pane remount mid-flight drops the toast, teardown, and navigation that lived in them — every mutation here awaits mutateAsync and puts its outcome in the continuation, so a bare .mutate( (or a `const { mutate }` destructure that reaches one) needs an allowlist entry with rationale",
   },
   {
     name: "context-menu-suppression",
@@ -626,18 +700,9 @@ export const CHECKS = [
     name: "bare-group-label",
     appliesTo: notVendoredUi,
     scan: perFile(UNASSOCIATED_LABEL_RE),
-    // Keyed per FILE, not per site, for both kinds of entry below: a coarser key
-    // means an unrelated edit to one of these files can't turn the entry stale
-    // mid-flight. The gate blocks NEW unassociated captions; the deferred group
-    // is not a to-do list.
+    // Keyed per FILE, not per site: a coarser key means an unrelated edit to one
+    // of these files can't turn the entry stale mid-flight.
     allowlist: [
-      // Deferred captions — same class, converted in their own change.
-      // Two "Linked issues" captions over the linked-issue chip rows.
-      "src/features/pulls/LinkedIssuesField.tsx",
-      // "Target" over the tag/commitish picker, "Release notes" over the editor.
-      "src/features/tags/CreateReleaseDialog.tsx",
-      // "Script" over the interpreter + path row.
-      "src/features/scripts/TaskDialog.tsx",
       // WRAPPING labels around a `<Checkbox>`, associated at RUNTIME: Base UI's
       // Root renders a `<span role="checkbox">` and routes a caller `id` to its
       // aria-hidden proxy input, so an `htmlFor` could not reach the interactive
@@ -676,6 +741,35 @@ export const CHECKS = [
     ],
     message:
       "a path that matches eventToBinding(e) against a user binding and preventDefaults it must apply the same clause the global listener does — isEditableTarget, isTypeaheadTarget, and isTypeaheadKey (src/lib/hotkeys/binding.ts) — or a single-key binding steals keystrokes from text fields or typeahead lists, and named keys stop reaching the surfaces that should still get them; any subset leaves the case the missing predicate covers, and a file that dispatches no rebindable binding needs an allowlist entry with rationale",
+  },
+  {
+    name: "titled-disabled-trigger",
+    appliesTo: notVendoredUi,
+    scan: perFile(TITLED_TRIGGER_DISABLED_RE),
+    // DEFERRED, not exempt: every entry is a residual site of the class the
+    // pickers were converted out of, held back because each needs its own live
+    // keyboard pass. The gate blocks NEW sites; these come off the list as they
+    // convert, and the stale-entry rule turns each conversion into a required
+    // edit here.
+    allowlist: [
+      // The projects picker — the direct twin of the converted labels picker.
+      "src/features/conversations/ProjectsPopover.tsx",
+      // Category menu; its hint is a bare sign-in string rather than a reason
+      // prop, so the conversion has to introduce the reason first.
+      "src/features/discussions/DiscussionsPanel.tsx",
+      // Two menus (close options, more actions) whose `disabled` sits inside the
+      // render Button rather than on the trigger.
+      "src/features/issues/RemoteIssueView.tsx",
+      // Merge menus: the wrapper is what refuses the click a disabled Button
+      // drops, so converting them wants the live merge-gate pass.
+      "src/features/pulls/LocalPrView.tsx",
+      "src/features/pulls/RemotePrView.tsx",
+      // The branch trigger's wrapper also owns the header shrink cascade, so a
+      // conversion has to move those classes to wrapperClassName.
+      "src/features/repository/BranchSwitcher.tsx",
+    ],
+    message:
+      "a menu/popover trigger that carries its disabled reason on a titled wrapper is hover-only — a natively disabled trigger leaves the tab order, so keyboard and screen-reader users reach neither the control nor the reason; compose `<Trigger render={<DisabledReasonButton disabled reason/>}>` instead (src/components/disabled-reason-button.tsx), which holds the reason on a focusable aria-disabled button whose own useButton swallows activation; a site that genuinely cannot take the primitive needs an allowlist entry with rationale",
   },
 ];
 
