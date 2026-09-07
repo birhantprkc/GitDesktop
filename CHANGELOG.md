@@ -12,6 +12,127 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-07
+
+### Added
+
+- **Markdown preview on diffs.** Markdown and MDX diffs add a **Raw / Preview**
+  toggle: Preview renders the file's new version as formatted prose (headings,
+  tables, highlighted code fences), so a docs change reads the way it will ship.
+  Deleted files preview their last version, a leading frontmatter block stays
+  out of the render, and it works on the working tree, commit details, stashes,
+  and an agent session's worktree changes (with *Toggle Markdown preview* in
+  the command palette).
+- **My work.** A cross-repo inbox of your open GitHub pull requests and issues:
+  anything you authored, were assigned, were mentioned in, or commented on, plus
+  anything awaiting your review. Newest first, so what's waiting on you is one
+  screen away instead of one repository at a time. Filter to pull requests or
+  issues, or type to narrow by title, repository, or number.
+  Press Enter on a row and an item from a repository you've added to GitDesktop
+  usually opens in the app; the ↗ marks the rows that will open on GitHub
+  instead. A pull request usually lands in the worktree its head branch is
+  checked out in, so you arrive in the checkout the work lives in, and
+  *Open in main workspace* on the row's right-click menu skips that. Reach it
+  with `Ctrl`/`⌘`+`Shift`+`M`, from the welcome screen, or from the command
+  palette (*My work*).
+- A pull request where you have an unfinished review now says so up front: a
+  notice at the top of the pull request offers **Finish on GitHub** and
+  **Discard on GitHub** actions, so a started review is never stranded.
+- **Review effort** (Settings → AI): pick how hard an agent-CLI reviewer
+  thinks, from a lighter, quicker pass to deepest reasoning — for reviews and
+  security audits alike, on Claude Code, GitHub Copilot, and opencode. Default
+  keeps each CLI's own setting.
+
+### Changed
+
+- Repo-aware AI reviews now reuse a single review workspace per repository, shared
+  by all its worktrees, so "Preparing review workspace…" is near-instant on every
+  review after the first. A workspace left untouched for a week is reclaimed on
+  startup.
+- **Open a branch's folder in one click.** Selecting a branch that's checked
+  out in another folder now opens that folder straight away, and the
+  branch's context menu carries the worktree actions: open, copy path,
+  rename, lock, promote to the main workspace, and delete. **Worktrees…** in
+  the branch dropdown opens the full manager, and every unavailable action row
+  in the dropdown itself now says why.
+- Discard all runs as one atomic operation: another GitDesktop action
+  attempted mid-discard is refused with a labeled busy notice, and the
+  discard finishes on the snapshot it started from.
+- When your GitHub sign-in's scopes can't write discussions, the list, the
+  New discussion dialog, and the thread now offer an in-app reconnect (or a
+  copyable refresh command) before a write fails.
+- Registering an MCP server checks its URL against your AI allowed hosts on
+  all three routes (add/edit dialog, import, registry browser), with a
+  one-click **Allow host** close at hand. Servers already in your registry
+  keep working unchanged.
+
+### Fixed
+
+- Branch, staging, stash, sync, conflict, repository-file, commit-box,
+  pull-request, issue, discussion, tag, and history actions now finish
+  reliably even when you switch tabs or close their dialog mid-operation:
+  toasts and results still arrive, confirm dialogs close, selections and
+  drafts clear or restore, recovery prompts still surface, the view
+  moves on even if the write settles while you’re elsewhere, and a failed
+  write rolls back and reports.
+- Agent CLI detection and the container-engine fallback probe less: an absent
+  CLI is remembered briefly, and when the preferred engine is stopped, turns
+  land directly on the running one.
+- Long values in the app's dropdown pickers, branch names in the pull-request
+  base and merge pickers most of all, now truncate with an ellipsis and show
+  the full value on hover (the options list still widens to fit long entries
+  before trimming the rest).
+- Deleting local branches (singly or through bulk clean-up) and committing now
+  wait for branch protection rules to load first, so protection applies from the
+  moment a repository opens.
+- **Explore repositories** reads cleanly with a screen reader: the search box
+  references the results list only while that list is on screen, and Tab moves
+  past the results rather than stepping through them.
+- Screen readers now announce the "Linked issues", "Release notes", "Target",
+  and "Script" captions across the pull-request, release, and task surfaces:
+  each names the group of controls it sits above.
+- GitHub API calls aimed at the open repository refuse a slug
+  that isn't plain `owner/repo`, so a crafted remote URL can't
+  retarget them at a different repository.
+- Image diffs type each side's preview from the file's actual bytes; a file
+  that can't be decoded safely (oversized, or an image whose header can't be
+  read) gets a "Too large to preview" pane.
+- Repository-relative links now open on GitHub, GitLab, or Bitbucket from any
+  forge-connected body, including descriptions, comments, review threads,
+  discussions, and release notes, with a hover card naming the path first. A
+  link that can't be opened shows where it leads and why, and a link to a
+  section jumps to it when the text marks that section with an anchor.
+- Pull requests with an in-progress review load normally: a review you've
+  started but not yet submitted surfaces as an unfinished-review notice.
+- The Reviewers, Assignees, Labels, Milestone, and Type pickers, plus the
+  sub-issue and relationship menus, now explain why they're unavailable to
+  keyboard and screen-reader users too: the disabled trigger stays focusable,
+  announces its reason, and shows it on hover.
+- Discarding a file whose name matches a Windows device (`nul`, `con`, `com1`,
+  and friends) removes it. When the Recycle Bin cannot accept such a name,
+  GitDesktop permanently deletes the file.
+- Files with Windows-reserved device names (`nul`, `con`, `com3`, and friends)
+  now say on the row and in the context menu why git can't stage them, and both
+  "Stage all" and the Repository files dialog's Force-add stage everything else
+  instead of failing outright.
+- Stash all and force-add now work in trees containing Windows-reserved
+  filenames (`nul`, `con`, `com1`, …): everything else is stashed or added,
+  and the reserved-named file stays put.
+- Transient notices in Settings clear when you discard your changes: the
+  Keyboard "was taken from…" warning and the AI provider's "already allowed"
+  host note both track the draft they described.
+- Settings whose value comes from a fixed list of choices now recover
+  when `settings.json` holds an unrecognized value, so each picker shows
+  the choice that's in effect.
+- The Changes list keeps its "Staged" and "Changes" section headers, and their
+  "Stage all" and "Unstage all" buttons, in place through heavy working-tree
+  churn: staging, stashing, and switching between repositories of very
+  different sizes all leave each header sitting above its own files.
+- While a branch update runs, every worktree of the repository now sees the
+  hold: switching to, renaming, or deleting the updating branch from another
+  worktree gets the same clear wait-a-moment message as the worktree the update
+  started in.
+
 ## [0.11.1] - 2026-09-04
 
 ### Changed
@@ -3693,7 +3814,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/theBGuy/GitDesktop/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/theBGuy/GitDesktop/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/theBGuy/GitDesktop/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/theBGuy/GitDesktop/compare/v0.9.6...v0.10.0
