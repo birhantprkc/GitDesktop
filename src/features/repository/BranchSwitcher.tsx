@@ -64,6 +64,7 @@ import {
   useRemoteBranches,
   useRemotes,
   useRepoStatus,
+  userWorktreesOptions,
   useSetBranchArchived,
   useStashAll,
   useStashCount,
@@ -76,7 +77,7 @@ import {
 import type { Branch, ForkPrMatch, RemoteBranch } from "@/lib/git/types";
 import { listUserWorktrees, type UserWorktree } from "@/lib/git/worktree";
 import { secondaryClickLabel } from "@/lib/hotkeys/binding";
-import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import { dispatchAction, useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import {
   LOCAL_AUDIT_STATE,
@@ -97,10 +98,15 @@ import { useConfirm } from "@/lib/stores/confirm";
 import { type SelectedPr, useUiStore } from "@/lib/stores/ui";
 import {
   isWorktreePromoting,
+  useWorktreeRemovalStore,
   useWorktreeRemovals,
   WORKTREE_PROMOTING_MESSAGE,
 } from "@/lib/stores/worktree-removal";
 import { toastError } from "@/lib/toast";
+import {
+  ARIA_DISABLED_CLASS,
+  useDisabledReason,
+} from "@/lib/use-disabled-reason";
 import { useRetained } from "@/lib/use-retained";
 import { cn } from "@/lib/utils";
 import {
@@ -136,6 +142,39 @@ import {
 
 /** Last path segment (folder name), tolerating either separator. */
 const baseName = (p: string) => p.split(/[/\\]/).filter(Boolean).pop() ?? p;
+
+/** How a branch row NAMES the checkout holding its branch — chip, tooltip, open
+ *  item, after-the-fact toast, and the phrases that say a row is held because of
+ *  it. Git counts the main workspace as a worktree and this row can point at it
+ *  when you're standing in a linked one, but users don't call it one; routing
+ *  the naming through one record keeps a later phrase from drifting back.
+ *  "Rename worktree…" and "Delete worktree…" are deliberately NOT routed here:
+ *  they name the git operation, and their held-reason carries the naming instead.
+ *  `noun` is bare, for badges and parenthetical reasons. */
+const ROW_CHECKOUT_COPY = {
+  linked: {
+    noun: "worktree",
+    open: "Open worktree",
+    title: (path: string) =>
+      `Checked out in worktree ${baseName(path)} (${path}) — this row opens it`,
+    opened: (path: string) => `Opened worktree ${baseName(path)}`,
+    blocked: "checked out in another worktree",
+    held: "in a worktree",
+  },
+  main: {
+    noun: "main workspace",
+    open: "Open main workspace",
+    title: (path: string) =>
+      `Checked out in the main workspace (${path}) — this row opens it`,
+    opened: (_path: string) => "Opened the main workspace",
+    blocked: "checked out in the main workspace",
+    held: "in the main workspace",
+  },
+} as const;
+
+/** Which {@link ROW_CHECKOUT_COPY} arm a listed worktree speaks in. */
+const rowCheckoutCopy = (isMain: boolean | undefined) =>
+  ROW_CHECKOUT_COPY[isMain ? "main" : "linked"];
 
 /** Sentence-initial form of the platform's secondary-click word — for
  *  status-icon hints where the phrase leads a sentence. */
@@ -175,22 +214,43 @@ const PR_STATE_LABEL: Record<PrAuditState, string> = {
 
 function MenuRow({
   disabled,
+  reason,
   onClick,
   children,
 }: {
   disabled?: boolean;
+  /** Why the row is held. Absent leaves an ordinary native disable — used where
+   *  the label already states the reason. */
+  reason?: string | null;
   onClick: () => void;
   children: React.ReactNode;
 }) {
+  const { blockedReason, reasonId, wrapperTitle, describedBy, nativeProps } =
+    useDisabledReason({ disabled, reason, onClick });
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+    // Block, not the span default: the row's `w-full` needs a full-width parent
+    // to size against inside the menu's block container.
+    <span
+      className={cn("block w-full", blockedReason && "cursor-not-allowed")}
+      title={wrapperTitle}
     >
-      {children}
-    </button>
+      <button
+        {...nativeProps}
+        type="button"
+        aria-describedby={describedBy}
+        className={cn(
+          "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50",
+          ARIA_DISABLED_CLASS,
+        )}
+      >
+        {children}
+      </button>
+      {blockedReason ? (
+        <span id={reasonId} className="sr-only">
+          {blockedReason}
+        </span>
+      ) : null}
+    </span>
   );
 }
 
@@ -287,17 +347,11 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const [reapplyOnSwitch, setReapplyOnSwitch] = useState(false);
   // Why a first switch attempt didn't work, shown when the dialog re-opens.
   const [switchHint, setSwitchHint] = useState<string | null>(null);
-  // A branch checked out in another worktree, awaiting confirm to open it.
-  const [worktreeSwitchTarget, setWorktreeSwitchTarget] = useState<{
-    name: string;
-    path: string;
-  } | null>(null);
-  const shownWorktreeSwitchTarget = useRetained(worktreeSwitchTarget);
   // The worktree pending a "Promote to main workspace" confirm — set by the
-  // palette action and the Worktrees-section row menu (the Worktrees dialog
+  // palette action and the branch row's worktree menu (the Worktrees dialog
   // hosts its own promote flow).
   const [promoteTarget, setPromoteTarget] = useState<UserWorktree | null>(null);
-  // Worktrees-section row menu targets — the rename and lock flows reuse the
+  // Branch-row worktree menu targets — the rename and lock flows reuse the
   // Worktrees dialog's own dialogs.
   const [renameWorktreeTarget, setRenameWorktreeTarget] =
     useState<UserWorktree | null>(null);
@@ -490,10 +544,10 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
 
   // Branches checked out in *another* worktree → that worktree's path. Git
   // forbids the same branch in two worktrees, so these can't be checked out
-  // here; the row offers to open the worktree instead. The active repo's own
-  // branch is excluded (it's the one you're on). Fetched while the menu OR the
-  // cleanup dialog is open: that dialog's archive and delete exclusions read
-  // this map, and the cleanup hotkey closes the menu on its way to it.
+  // here; the row opens that worktree instead. The active repo's own branch is
+  // excluded (it's the one you're on). Fetched while the menu OR the cleanup
+  // dialog is open: that dialog's archive and delete exclusions read this map,
+  // and the cleanup hotkey closes the menu on its way to it.
   const userWorktrees = useUserWorktrees(repoPath, open || cleanupOpen);
   const activeNorm = normPath(repoPath);
   const worktreeByBranch = useMemo(() => {
@@ -504,8 +558,8 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     }
     return map;
   }, [userWorktrees.data, activeNorm]);
-  // Cross-worktree navigation (same fetch as the map above): the main
-  // workspace, the other worktrees you can jump to, and whether you're
+  // Cross-worktree state (same fetch as the map above): the main workspace the
+  // banner links to, the count the Worktrees row shows, and whether you're
   // currently in a linked (non-main) worktree — where a branch checkout lands
   // here, not in main.
   const worktreeList = userWorktrees.data ?? [];
@@ -513,9 +567,9 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     (w) => normPath(w.path) === activeNorm,
   );
   const mainWorktree = worktreeList.find((w) => w.isMain);
-  const otherWorktrees = worktreeList.filter(
-    (w) => normPath(w.path) !== activeNorm,
-  );
+  // Linked ones only: the main workspace isn't a "worktree" in user vocabulary,
+  // and this is the set the dialog's own empty state keys on.
+  const linkedWorktreeCount = worktreeList.filter((w) => !w.isMain).length;
   const inLinkedWorktree = Boolean(currentWorktree && !currentWorktree.isMain);
   // A worktree whose folder is being removed still lists (the removal outlives
   // the dialog that started it), but nothing may act on it until it settles.
@@ -669,10 +723,6 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     ...visibleBranches,
     ...(showArchived ? archivedBranches : []),
     ...(showRemote ? remoteOnly : []),
-    // The Worktrees section is a selectable list too — key its rows by path so
-    // arrow nav flows from the branch rows straight into it (each row carries a
-    // matching `data-row`). Paths use forward slashes, safe as a data-row value.
-    ...otherWorktrees.map((w) => ({ name: w.path })),
   ];
   const onBranchKeyDown = listKeyboardNav({
     items: navBranches,
@@ -682,6 +732,19 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   });
   const stashes = stashCount.data ?? 0;
   const hasChanges = (status.data?.entries.length ?? 0) > 0;
+  // Which switch attempt is current. `switchTo` can suspend on the worktree
+  // lookup, and the popover reopens long before a stalled `git worktree list`
+  // returns — so a later attempt must be able to retire an earlier one rather
+  // than both acting.
+  const switchRequestRef = useRef(0);
+  // The live answer, readable AFTER an await — same pattern as `currentNameRef`.
+  // `switchTo` can resume on a worktree lookup that outlived the render it
+  // started in, and a tree that turned dirty meanwhile must still get the
+  // bring/stash choice instead of a silent checkout.
+  const hasChangesRef = useRef(hasChanges);
+  useEffect(() => {
+    hasChangesRef.current = hasChanges;
+  }, [hasChanges]);
   // Rebase refuses only on dirty TRACKED files, so the proactive stash offer
   // keys on this — an untracked-only tree rebases fine, and stashing it
   // unasked would move those files into a stash on any replay conflict.
@@ -744,21 +807,108 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     }
   }
 
-  function switchTo(name: string, remote: string | null = null) {
+  // Now async: the worktree answer decides whether a row checks out or
+  // navigates, and it can still be in flight when the click lands.
+  async function switchTo(name: string, remote: string | null = null) {
     if (amending) return; // guarded by the disabled trigger; belt-and-suspenders
+    // Claimed after the amending bail so a no-op click can't retire a real
+    // attempt that is still resolving.
+    const switchRequest = ++switchRequestRef.current;
     setOpen(false);
-    // A branch that's checked out in another worktree can't be checked out here
-    // (git forbids it); offer to open that worktree instead of erroring.
-    const wtPath = worktreeByBranch.get(name);
+    // A branch checked out in another worktree can't be checked out here (git
+    // forbids it), so the row navigates there instead. No confirm on the badged
+    // path — the chip already says where the branch lives, and opening a folder
+    // is not a destructive act.
+    let wtPath = worktreeByBranch.get(name);
+    let resolvedHere: UserWorktree | undefined;
+    // The open-gated read hasn't answered yet, or is answering again — and only
+    // a NEGATIVE verdict is distrusted: a hit stays a hit (a listed worktree
+    // still exists, and mid-removal is `refuseWhileLeaving`'s job), but a miss
+    // is worthless from a list that is unanswered or in flight, because
+    // react-query serves the previous data through a refetch and every worktree
+    // mutation invalidates this key. Routed through `fetchQuery` on that same
+    // key so a click during the refetch JOINS it instead of racing it with a
+    // second `git worktree list`. A failed lookup falls through to the ordinary
+    // checkout, where git refuses with its own message. Local rows only: a
+    // remote-only row's name has no local branch by construction, so no
+    // worktree can hold it and the lookup would only add a subprocess.
+    if (
+      remote === null &&
+      !wtPath &&
+      !userWorktrees.isError &&
+      (userWorktrees.data === undefined || userWorktrees.isFetching)
+    ) {
+      try {
+        // Shared options, not a second spelling: this key's `networkMode:
+        // "always"` is what keeps an offline read from PARKING forever, and a
+        // parked fetch would hang this await with the popover already closed —
+        // no navigation, no checkout, no toast. `retry: false` drops the
+        // client's one retry plus backoff when this call STARTS the fetch; a
+        // call that joins one already in flight inherits that fetch's options.
+        const wts = await queryClient.fetchQuery({
+          ...userWorktreesOptions(repoPath),
+          retry: false,
+        });
+        resolvedHere = wts.find(
+          (w) => w.branch === name && normPath(w.path) !== activeNorm,
+        );
+        wtPath = resolvedHere?.path;
+      } catch {
+        // fall through
+      }
+      // BELOW the try/catch, so every exit passes it — resolved, rejected, and
+      // found-nothing alike. This await outlives its render and everything past
+      // here is a global write, so every read that GATES that write is re-taken:
+      // the repo (acting would target the one the user left), the attempt (the
+      // popover reopens while a stalled lookup is out, so a later pick already
+      // started its own switch), and amend mode (entered elsewhere meanwhile; a
+      // checkout would strand it) — plus `hasChangesRef` and the removal store
+      // below, which read live. The reapply default stays the click render's
+      // value on purpose: it only seeds a checkbox the user then sees.
+      const live = useUiStore.getState();
+      if (
+        switchRequest !== switchRequestRef.current ||
+        live.repoPath !== repoPath ||
+        live.amendingHash !== null
+      )
+        return;
+    }
     if (wtPath) {
-      // Its folder is on its way out — offering to open it would land the app
-      // in a directory mid-deletion.
-      if (refuseWhileLeaving(wtPath, removingPaths.has(wtPath))) return;
-      setWorktreeSwitchTarget({ name, path: wtPath });
+      // Its folder is on its way out — opening it would land the app in a
+      // directory mid-deletion.
+      // Read at FIRE time, not from the render's Set: this line can run after
+      // the lookup's await, and a removal that started meanwhile would be
+      // invisible to a pre-await snapshot. `refuseWhileLeaving` already reads
+      // the promote half live; this is its removal twin.
+      if (
+        refuseWhileLeaving(
+          wtPath,
+          Boolean(
+            useWorktreeRemovalStore.getState().byRepo[repoPath]?.[wtPath],
+          ),
+        )
+      )
+        return;
+      // Awaited for its verdict: it resolves false both when the open failed
+      // (it toasts that itself) and when the user switched repos mid-validate
+      // (silent by design) — a success toast over either would claim a
+      // navigation that never happened.
+      // The attempt check rides INTO the open: `validateRepo` is a second await
+      // downstream of this function's guard, and a newer pick during it leaves
+      // the repo unchanged, so only the attempt identity can retire this one.
+      const navigated = await openWorktree(
+        wtPath,
+        () => switchRequest === switchRequestRef.current,
+      );
+      // Only when this call resolved the worktree itself: that state is exactly
+      // the one where the map was empty, so the row carried no chip and the whole
+      // app just changed folders with no prior signal. Say so after the fact.
+      if (navigated && resolvedHere)
+        toast.success(rowCheckoutCopy(resolvedHere.isMain).opened(wtPath));
       return;
     }
     // with work in progress, let the user choose to bring or stash it
-    if (hasChanges) {
+    if (hasChangesRef.current) {
       setSwitchHint(null);
       setReapplyOnSwitch(settings.data?.reapplyStashOnSwitch ?? false);
       setSwitchTarget({ name, remote });
@@ -1231,6 +1381,132 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     switchAutostash.isPending ||
     recovery.pending;
 
+  // Every "there is none" reason below derives from a query whose empty answer
+  // and whose UNANSWERED state are the same value — `?? null` for the names,
+  // `?? 0` for the counts. Asserting the absence on that value tells a user with
+  // a dirty tree on `master` that HEAD is detached and nothing is uncommitted,
+  // so no arm may assert an absence until its own read has actually answered.
+  // All four are unconditional, so `isPending` is the first-answer window and
+  // nothing else. A failed first read leaves the SAME undefined value a pending
+  // one does, so it gets its own arm rather than the assertion — and it isn't
+  // even short-lived: the query client retries once, only `status` polls, so for
+  // branches/defaultBranch/stashCount the failure stands until a refocus or an
+  // invalidation. Each value below is null once its read has answered, and
+  // otherwise the honest reason it can't.
+  const unread = (
+    q: { isPending: boolean; isError: boolean; data: unknown },
+    checking: string,
+    failed: string,
+  ) => {
+    if (q.isPending) return checking;
+    // An error over data that already landed is a failed REFRESH, not a missing
+    // answer: the row still has something true to say, so it says it.
+    if (q.isError && q.data === undefined) return failed;
+    return null;
+  };
+  const headUnread = unread(
+    status,
+    "Checking the current branch…",
+    "Couldn't read the repository status.",
+  );
+  const changesUnread = unread(
+    status,
+    "Checking for uncommitted changes…",
+    "Couldn't read the repository status.",
+  );
+  const defaultBranchUnread = unread(
+    defaultBranch,
+    "Checking the default branch…",
+    "Couldn't read the default branch.",
+  );
+  const branchesUnread = unread(
+    branches,
+    "Checking branches…",
+    "Couldn't read the branch list.",
+  );
+  const stashCountUnread = unread(
+    stashCount,
+    "Checking for stashes…",
+    "Couldn't read the stashes.",
+  );
+
+  // Why each multi-condition menu row is held, arms in the order that row's own
+  // `disabled` expression tests them. Null where the label already carries the
+  // reason — a row must not say it twice.
+  const renameCurrentBlockedReason =
+    headUnread ?? "HEAD is detached — there's no current branch to rename.";
+  const deleteCurrentBlockedReason = (() => {
+    if (!currentName)
+      return (
+        headUnread ?? "HEAD is detached — there's no current branch to delete."
+      );
+    // The remaining arm is branch protection, which the label already states.
+    return null;
+  })();
+  const updateFromDefaultBlockedReason = (() => {
+    if (!defaultName)
+      return defaultBranchUnread ?? "This repository has no default branch.";
+    if (!currentName)
+      return headUnread ?? "HEAD is detached — there's no branch to update.";
+    if (defaultName === currentName) return `You're already on ${defaultName}.`;
+    if (busy) return "Another git operation is running.";
+    return null;
+  })();
+  // The branch-count rows below share a shape: an unanswered branch list counts
+  // as zero, but a branch rule holds whether or not that list has landed — so an
+  // unanswered count yields to the rule arms rather than displacing them, and
+  // only a row with no rule against it reports that the list isn't in yet.
+  const mergeIntoCurrentBlockedReason = (() => {
+    if (otherBranches.length === 0) {
+      if (!branchesUnread) return "There are no other branches to merge from.";
+      if (canMergeIntoCurrent) return branchesUnread;
+    }
+    if (lockCurrent) return null; // the label says "(requires PR)"
+    if (!canMergeIntoCurrent)
+      return `A branch rule doesn't allow merge commits on ${currentName}.`;
+    return null;
+  })();
+  const squashIntoCurrentBlockedReason = (() => {
+    if (otherBranches.length === 0) {
+      if (!branchesUnread) return "There are no other branches to merge from.";
+      if (canSquashIntoCurrent) return branchesUnread;
+    }
+    if (lockCurrent)
+      return `A branch rule requires a pull request to change ${currentName}.`;
+    if (!canSquashIntoCurrent)
+      return `A branch rule doesn't allow squash merges on ${currentName}.`;
+    return null;
+  })();
+  const rebaseCurrentBlockedReason = (() => {
+    if (otherBranches.length === 0) {
+      if (!branchesUnread) return "There are no other branches to rebase onto.";
+      if (!lockCurrent) return branchesUnread;
+    }
+    if (lockCurrent)
+      return `A branch rule requires a pull request to change ${currentName}.`;
+    return null;
+  })();
+  const changeBaseBlockedReason = (() => {
+    if (!currentName)
+      return headUnread ?? "HEAD is detached — there's no branch to rebase.";
+    if (otherBranches.length < 2) {
+      if (!branchesUnread)
+        return "Changing the base needs at least two other branches.";
+      // `busy` joins the rule arms here: it too is true right now, whatever the
+      // branch count turns out to be.
+      if (!lockCurrent && !busy) return branchesUnread;
+    }
+    if (lockCurrent)
+      return `A branch rule requires a pull request to change ${currentName}.`;
+    if (busy) return "Another git operation is running.";
+    return null;
+  })();
+  const noChangesBlockedReason =
+    changesUnread ?? "There are no uncommitted changes.";
+  const popStashBlockedReason =
+    stashCountUnread ?? "There are no stashes to pop.";
+  const viewStashesBlockedReason = stashCountUnread ?? "There are no stashes.";
+
   // Hotkey handlers reuse the menu's own flows, so every gate (clean tree,
   // stash count, picker availability) and confirm dialog applies equally.
   useHotkeyAction("show-branches", () => setOpen(true), !amending);
@@ -1247,7 +1523,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     () => {
       // Target: the highlighted row when the list is open, else the current
       // branch. An open list with a highlight that resolves to no local branch
-      // (remote-only row / worktree path) is a real miss, not a fallback.
+      // (a remote-only row) is a real miss, not a fallback.
       let branch: Branch | undefined;
       if (open && activeBranch) {
         branch = branches.data?.find((b) => b.name === activeBranch);
@@ -1421,11 +1697,17 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   useHotkeyAction("discard-all", () => setDiscardAllOpen(true), hasChanges);
   // Cross-worktree navigation (palette-only). They can fire while the popover is
   // closed, so they can't rely on the open-gated `userWorktrees` cache — fetch
-  // the worktree list fresh, like the delete-branch off-switch does.
+  // the worktree list fresh, like the delete-branch off-switch does. Both then
+  // re-check the live repo before acting on the answer: the lookup outlives the
+  // render it started in, and acting on its answer after a repo switch would
+  // navigate to (or offer to promote) a worktree of the repo the user just left.
+  // `useOpenWorktree`'s own guard can't see this window — it captures the live
+  // repo when it is CALLED, which is already after this await.
   useHotkeyAction("open-main-workspace", async () => {
     setOpen(false);
     try {
       const wts = await listUserWorktrees(repoPath);
+      if (useUiStore.getState().repoPath !== repoPath) return;
       const main = wts.find((w) => w.isMain);
       if (!main) {
         toast.error("Couldn't find the main workspace for this repository.");
@@ -1435,7 +1717,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         toast.info("Already in the main workspace.");
         return;
       }
-      openWorktree(main.path);
+      void openWorktree(main.path);
     } catch (e) {
       toastError(e);
     }
@@ -1444,6 +1726,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     setOpen(false);
     try {
       const wts = await listUserWorktrees(repoPath);
+      if (useUiStore.getState().repoPath !== repoPath) return;
       const here = wts.find((w) => normPath(w.path) === normPath(repoPath));
       if (!here || here.isMain) {
         toast.info(
@@ -1483,15 +1766,27 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     // archived branch can be checked out, and this is its only way back.
     const archiveLabel = branch.archived ? "Unarchive" : "Archive";
     // The worktree (other than the active checkout) this branch occupies, when
-    // any — the Delete worktree… item gates on it (git refuses to remove the
-    // main working tree).
+    // any — the row's whole worktree menu group hangs off it, and it narrows the
+    // object those items act on.
     const rowWorktree = (userWorktrees.data ?? []).find(
       (w) => w.path === worktreeByBranch.get(branch.name),
     );
     const inWorktree = rowWorktree !== undefined;
+    // `worktreeByBranch` admits the main workspace (it's a worktree to git, and
+    // any checkout other than the active one qualifies), so the strings that NAME
+    // this row's holding checkout come from the record instead of saying
+    // "worktree" flat.
+    const rowCopy = rowCheckoutCopy(rowWorktree?.isMain);
     const rowWorktreeRemoving = Boolean(
       rowWorktree && removingPaths.has(rowWorktree.path),
     );
+    const wtLabel = (label: string, otherReason?: string) =>
+      worktreeItemLabel(label, rowWorktreeRemoving, otherReason);
+    const renameWorktreeBlockedReason = (() => {
+      if (rowWorktree?.isMain) return rowCopy.noun;
+      if (rowWorktree?.isLocked) return "locked";
+      return undefined;
+    })();
     // Best-effort by design: a null `defaultName` (still loading, or unresolvable)
     // drops the default-branch guard rather than disabling Archive everywhere.
     // The worktree guard is HELD rather than dropped while its read is in
@@ -1513,7 +1808,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         return null;
       if (userWorktrees.data === undefined && !userWorktrees.isError)
         return "checking worktrees…";
-      if (inWorktree) return "checked out in another worktree";
+      if (inWorktree) return rowCopy.blocked;
       return null;
     })();
     // Outbound sync gating. `pushable` = tracked on a KNOWN remote and ahead →
@@ -1596,7 +1891,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
               data-row={branch.name}
               className="flex w-full flex-col gap-y-0.5 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none"
               onClick={() => {
-                if (!branch.isCurrent) switchTo(branch.name);
+                if (!branch.isCurrent) void switchTo(branch.name);
               }}
             >
               <span className="flex w-full items-center gap-2">
@@ -1650,15 +1945,13 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                     </span>
                   );
                 })()}
-                {inWorktree && (
+                {rowWorktree && (
                   <span
                     className="flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground"
-                    title={`Checked out in another worktree (${worktreeByBranch.get(
-                      branch.name,
-                    )}) — open it instead of switching`}
+                    title={rowCopy.title(rowWorktree.path)}
                   >
                     <TreeStructureIcon className="size-3" weight="bold" />
-                    worktree
+                    {rowCopy.noun}
                   </span>
                 )}
                 {/* Two distinct indicators: the sync indicator shows the
@@ -1908,7 +2201,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
             </>
           )}
           <ContextMenuItem onClick={() => openRename(branch.name)}>
-            Rename…
+            Rename branch…
           </ContextMenuItem>
           <ContextMenuItem
             onClick={() => copyText(branch.name, "Branch name copied")}
@@ -1924,21 +2217,101 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
               : `${archiveLabel} (${archiveBlockedReason})`}
           </ContextMenuItem>
           <ContextMenuSeparator />
-          {inWorktree && (
-            <ContextMenuItem
-              disabled={rowWorktree?.isMain || rowWorktreeRemoving}
-              onClick={() => {
-                if (!rowWorktree) return;
-                setOpen(false);
-                setRemoveWorktreeTarget(rowWorktree);
-              }}
-            >
-              {worktreeItemLabel(
-                "Delete worktree…",
-                rowWorktreeRemoving,
-                rowWorktree?.isMain ? "main workspace" : undefined,
+          {rowWorktree && (
+            <>
+              <ContextMenuItem
+                disabled={rowWorktreeRemoving}
+                onClick={() => {
+                  if (refuseWhileLeaving(rowWorktree.path, rowWorktreeRemoving))
+                    return;
+                  setOpen(false);
+                  void openWorktree(rowWorktree.path);
+                }}
+              >
+                {wtLabel(rowCopy.open)}
+              </ContextMenuItem>
+              {/* Copying a path acts on nothing, so a removal doesn't block it. */}
+              <ContextMenuItem
+                onClick={() => copyText(rowWorktree.path, "Path copied")}
+              >
+                Copy path
+              </ContextMenuItem>
+              <ContextMenuItem
+                // git worktree move refuses the main worktree and a locked one.
+                disabled={
+                  rowWorktree.isMain ||
+                  rowWorktree.isLocked ||
+                  rowWorktreeRemoving
+                }
+                onClick={() => {
+                  setOpen(false);
+                  setRenameWorktreeTarget(rowWorktree);
+                }}
+              >
+                {wtLabel("Rename worktree…", renameWorktreeBlockedReason)}
+              </ContextMenuItem>
+              {!rowWorktree.isMain &&
+                (rowWorktree.isLocked ? (
+                  <ContextMenuItem
+                    // In-place state change: the list refreshes via the
+                    // mutation's invalidation, so the popover stays open.
+                    disabled={rowWorktreeRemoving}
+                    onClick={() => {
+                      // The menu can outlive the state that disabled this item,
+                      // and a promote's claim never re-renders it.
+                      if (
+                        refuseWhileLeaving(
+                          rowWorktree.path,
+                          rowWorktreeRemoving,
+                        )
+                      )
+                        return;
+                      void doUnlockWorktree(rowWorktree.path);
+                    }}
+                  >
+                    {wtLabel("Unlock")}
+                  </ContextMenuItem>
+                ) : (
+                  <ContextMenuItem
+                    disabled={rowWorktreeRemoving}
+                    onClick={() => {
+                      setOpen(false);
+                      setLockWorktreeTarget(rowWorktree);
+                    }}
+                  >
+                    {wtLabel("Lock…")}
+                  </ContextMenuItem>
+                ))}
+              {/* Promote moves this worktree's branch into the main workspace,
+                  so it needs a linked worktree with a branch. */}
+              {!rowWorktree.isMain && !rowWorktree.isDetached && (
+                <ContextMenuItem
+                  disabled={rowWorktree.isLocked || rowWorktreeRemoving}
+                  onClick={() => {
+                    setOpen(false);
+                    setPromoteTarget(rowWorktree);
+                  }}
+                >
+                  {wtLabel(
+                    "Promote to main workspace…",
+                    rowWorktree.isLocked ? "locked" : undefined,
+                  )}
+                </ContextMenuItem>
               )}
-            </ContextMenuItem>
+              <ContextMenuItem
+                disabled={rowWorktree.isMain || rowWorktreeRemoving}
+                onClick={() => {
+                  setOpen(false);
+                  setRemoveWorktreeTarget(rowWorktree);
+                }}
+              >
+                {wtLabel(
+                  "Delete worktree…",
+                  rowWorktree.isMain ? rowCopy.noun : undefined,
+                )}
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+            </>
           )}
           <ContextMenuItem
             disabled={deletionBlocked || inWorktree}
@@ -1948,10 +2321,10 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
             }}
           >
             {deletionBlocked
-              ? "Delete… (protected)"
+              ? "Delete branch… (protected)"
               : inWorktree
-                ? "Delete… (in worktree)"
-                : "Delete…"}
+                ? `Delete branch… (${rowCopy.held})`
+                : "Delete branch…"}
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
@@ -1973,7 +2346,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
               data-row={branch.name}
               title={`Check out ${branch.name} — creates a local branch tracking ${branch.remote}/${branch.name}`}
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none"
-              onClick={() => switchTo(branch.name, branch.remote)}
+              onClick={() => void switchTo(branch.name, branch.remote)}
             >
               <CloudArrowDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate">{branch.name}</span>
@@ -1991,7 +2364,9 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
           }
         />
         <ContextMenuContent className="min-w-48">
-          <ContextMenuItem onClick={() => switchTo(branch.name, branch.remote)}>
+          <ContextMenuItem
+            onClick={() => void switchTo(branch.name, branch.remote)}
+          >
             Check out
           </ContextMenuItem>
           <ContextMenuItem
@@ -2106,7 +2481,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                       className="shrink-0 cursor-pointer font-medium text-primary hover:underline"
                       onClick={() => {
                         setOpen(false);
-                        openWorktree(mainWorktree.path);
+                        void openWorktree(mainWorktree.path);
                       }}
                     >
                       Open main workspace
@@ -2172,168 +2547,11 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                   </>
                 )}
               </div>
-              {otherWorktrees.length > 0 && (
-                <div className="border-t py-1">
-                  <p className="px-3 py-1 text-[11px] font-medium text-muted-foreground">
-                    Worktrees
-                  </p>
-                  {/* No isCurrent gating on these menus: otherWorktrees excludes
-                      the active checkout, by the same normalized-path comparison
-                      the whole section keys on. */}
-                  {otherWorktrees.map((w) => {
-                    const isRemoving = removingPaths.has(w.path);
-                    const itemLabel = (label: string, otherReason?: string) =>
-                      worktreeItemLabel(label, isRemoving, otherReason);
-                    const renameBlockedReason = (() => {
-                      if (w.isMain) return "main workspace";
-                      if (w.isLocked) return "locked";
-                      return undefined;
-                    })();
-                    return (
-                      <ContextMenu key={w.path}>
-                        <ContextMenuTrigger
-                          render={
-                            <button
-                              type="button"
-                              data-row={w.path}
-                              // Not `disabled`: the row must stay focusable so
-                              // arrow-key nav can move through it.
-                              aria-disabled={isRemoving || undefined}
-                              title={
-                                isRemoving ? "Removal in progress" : undefined
-                              }
-                              className={cn(
-                                "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none",
-                                isRemoving && "cursor-default",
-                              )}
-                              onClick={() => {
-                                if (refuseWhileLeaving(w.path, isRemoving))
-                                  return;
-                                setOpen(false);
-                                openWorktree(w.path);
-                              }}
-                            >
-                              <TreeStructureIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                              <span className="min-w-0 flex-1 truncate">
-                                {w.isDetached
-                                  ? "detached HEAD"
-                                  : w.branch || "—"}
-                              </span>
-                              {w.isMain && (
-                                <Badge variant="secondary" className="shrink-0">
-                                  Main
-                                </Badge>
-                              )}
-                              <span
-                                className="max-w-[45%] shrink-0 truncate text-[11px] text-muted-foreground"
-                                // Full path, not the folder name the row already
-                                // shows — the path is what disambiguates.
-                                onMouseEnter={clipTitle(w.path)}
-                              >
-                                {baseName(w.path)}
-                              </span>
-                            </button>
-                          }
-                        />
-                        <ContextMenuContent className="min-w-48">
-                          <ContextMenuItem
-                            disabled={isRemoving}
-                            onClick={() => {
-                              if (refuseWhileLeaving(w.path, isRemoving))
-                                return;
-                              setOpen(false);
-                              openWorktree(w.path);
-                            }}
-                          >
-                            {itemLabel("Open worktree")}
-                          </ContextMenuItem>
-                          {/* Copying a path acts on nothing, so a removal doesn't
-                            block it. */}
-                          <ContextMenuItem
-                            onClick={() => copyText(w.path, "Path copied")}
-                          >
-                            Copy path
-                          </ContextMenuItem>
-                          <ContextMenuSeparator />
-                          <ContextMenuItem
-                            // git worktree move refuses the main worktree and a
-                            // locked one.
-                            disabled={w.isMain || w.isLocked || isRemoving}
-                            onClick={() => {
-                              setOpen(false);
-                              setRenameWorktreeTarget(w);
-                            }}
-                          >
-                            {itemLabel("Rename…", renameBlockedReason)}
-                          </ContextMenuItem>
-                          {!w.isMain &&
-                            (w.isLocked ? (
-                              <ContextMenuItem
-                                // In-place state change: the list refreshes via the
-                                // mutation's invalidation, so the popover stays open.
-                                disabled={isRemoving}
-                                onClick={() => {
-                                  // The menu can outlive the state that disabled
-                                  // this item, and a promote's claim never
-                                  // re-renders it.
-                                  if (refuseWhileLeaving(w.path, isRemoving))
-                                    return;
-                                  void doUnlockWorktree(w.path);
-                                }}
-                              >
-                                {itemLabel("Unlock")}
-                              </ContextMenuItem>
-                            ) : (
-                              <ContextMenuItem
-                                disabled={isRemoving}
-                                onClick={() => {
-                                  setOpen(false);
-                                  setLockWorktreeTarget(w);
-                                }}
-                              >
-                                {itemLabel("Lock…")}
-                              </ContextMenuItem>
-                            ))}
-                          {/* Promote moves this worktree's branch into the main
-                            workspace, so it needs a linked worktree with a
-                            branch. */}
-                          {!w.isMain && !w.isDetached && (
-                            <ContextMenuItem
-                              disabled={w.isLocked || isRemoving}
-                              onClick={() => {
-                                setOpen(false);
-                                setPromoteTarget(w);
-                              }}
-                            >
-                              {itemLabel(
-                                "Promote to main workspace…",
-                                w.isLocked ? "locked" : undefined,
-                              )}
-                            </ContextMenuItem>
-                          )}
-                          <ContextMenuSeparator />
-                          <ContextMenuItem
-                            disabled={w.isMain || isRemoving}
-                            onClick={() => {
-                              setOpen(false);
-                              setRemoveWorktreeTarget(w);
-                            }}
-                          >
-                            {itemLabel(
-                              "Delete worktree…",
-                              w.isMain ? "main workspace" : undefined,
-                            )}
-                          </ContextMenuItem>
-                        </ContextMenuContent>
-                      </ContextMenu>
-                    );
-                  })}
-                </div>
-              )}
               <div className="border-t py-1">
                 <MenuRow onClick={openCreate}>New branch…</MenuRow>
                 <MenuRow
                   disabled={!currentName}
+                  reason={renameCurrentBlockedReason}
                   onClick={() => {
                     if (!currentName) return;
                     openRename(currentName);
@@ -2345,6 +2563,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                   disabled={
                     !currentName || isDeletionBlocked(rulesConfig, currentName)
                   }
+                  reason={deleteCurrentBlockedReason}
                   onClick={() => {
                     if (!currentName) return;
                     setOpen(false);
@@ -2363,10 +2582,29 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                 >
                   Clean up branches…
                 </MenuRow>
+                {/* Dispatched, not owned: RepositoryMenu holds the one
+                    WorktreesDialog instance and the one "worktrees" handler, so
+                    a second mount here would stack a duplicate dialog on top of
+                    it, and a second registration would shadow the ⋮ menu's
+                    handler (dispatch runs the newest enabled one). Direct call
+                    in the same tick, as RepoSwitcher's rows do — the palette's
+                    setTimeout exists for closing a MODAL, which a popover
+                    isn't. */}
+                <MenuRow
+                  onClick={() => {
+                    setOpen(false);
+                    if (!dispatchAction("worktrees"))
+                      toast.error("Couldn't open the worktree manager.");
+                  }}
+                >
+                  Worktrees
+                  {linkedWorktreeCount > 0 ? ` (${linkedWorktreeCount})` : ""}…
+                </MenuRow>
               </div>
               <div className="border-t py-1">
                 <MenuRow
                   disabled={!hasChanges}
+                  reason={noChangesBlockedReason}
                   onClick={() => {
                     setOpen(false);
                     setDiscardAllOpen(true);
@@ -2376,6 +2614,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                 </MenuRow>
                 <MenuRow
                   disabled={!hasChanges}
+                  reason={noChangesBlockedReason}
                   onClick={() => {
                     setOpen(false);
                     setStashAllOpen(true);
@@ -2385,6 +2624,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                 </MenuRow>
                 <MenuRow
                   disabled={stashes === 0}
+                  reason={popStashBlockedReason}
                   onClick={() => {
                     setOpen(false);
                     setStashPopOpen(true);
@@ -2394,6 +2634,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                 </MenuRow>
                 <MenuRow
                   disabled={stashes === 0}
+                  reason={viewStashesBlockedReason}
                   onClick={() => {
                     setOpen(false);
                     setStashesView("stashes");
@@ -2430,6 +2671,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                     defaultName === currentName ||
                     busy
                   }
+                  reason={updateFromDefaultBlockedReason}
                   onClick={() => {
                     if (currentName) void doUpdateFromDefault(currentName);
                   }}
@@ -2438,6 +2680,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                 </MenuRow>
                 <MenuRow
                   disabled={otherBranches.length === 0 || !canMergeIntoCurrent}
+                  reason={mergeIntoCurrentBlockedReason}
                   onClick={() => openPicker("merge")}
                 >
                   {lockCurrent
@@ -2446,12 +2689,14 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                 </MenuRow>
                 <MenuRow
                   disabled={otherBranches.length === 0 || !canSquashIntoCurrent}
+                  reason={squashIntoCurrentBlockedReason}
                   onClick={() => openPicker("squash")}
                 >
                   Squash and merge into current branch…
                 </MenuRow>
                 <MenuRow
                   disabled={otherBranches.length === 0 || lockCurrent}
+                  reason={rebaseCurrentBlockedReason}
                   onClick={() => openPicker("rebase")}
                 >
                   Rebase current branch…
@@ -2463,6 +2708,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                     lockCurrent ||
                     busy
                   }
+                  reason={changeBaseBlockedReason}
                   onClick={openRebaseOnto}
                 >
                   Change base…
@@ -2606,29 +2852,6 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         repoPath={repoPath}
         open={opHistoryOpen}
         onOpenChange={setOpHistoryOpen}
-      />
-
-      <ConfirmDialog
-        open={worktreeSwitchTarget !== null}
-        onCancel={() => setWorktreeSwitchTarget(null)}
-        title="Open worktree?"
-        body={
-          <>
-            <span className="font-mono">{shownWorktreeSwitchTarget?.name}</span>{" "}
-            is checked out in another worktree. A branch can only be in one
-            worktree at a time, so open that worktree instead of switching here.
-          </>
-        }
-        confirmLabel="Open worktree"
-        onConfirm={() => {
-          const target = worktreeSwitchTarget;
-          setWorktreeSwitchTarget(null);
-          if (!target) return;
-          // This dialog can outlive the state that would have refused it.
-          if (refuseWhileLeaving(target.path, removingPaths.has(target.path)))
-            return;
-          openWorktree(target.path);
-        }}
       />
 
       <ConfirmDialog

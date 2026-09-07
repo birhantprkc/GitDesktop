@@ -148,16 +148,44 @@ export function useOpenRepoByPath() {
  * resolves it to the worktree root — so opening it Just Works. Unlike
  * {@link useOpenRepoByPath} this does NOT record the path in recents: worktrees
  * are child checkouts of a repo already in the switcher, not first-class repos.
+ *
+ * Resolves TRUE only once the app is actually in the worktree — false when the
+ * open failed (which toasts), when the user switched repos meanwhile, or when
+ * `stillWanted` retired it; the latter two are silent. A caller that reports the
+ * navigation to the user must await this and gate on it; callers that only
+ * navigate ignore the value, awaited or not. The guard reads the live repo when
+ * this is CALLED, so a caller that awaits something else FIRST needs its own
+ * check before calling.
+ *
+ * @param stillWanted Re-checked after `validateRepo`, for a caller that
+ * sequences several opens: a newer one can start while this validate runs, and
+ * the repo is unchanged in that case, so only the caller knows it is stale. A
+ * standalone open passes nothing.
  */
 export function useOpenWorktree() {
   const openRepo = useUiStore((s) => s.openRepo);
   return useCallback(
-    async (path: string) => {
+    async (path: string, stillWanted?: () => boolean) => {
+      // `openRepo` writes GLOBAL navigation state, so it may only fire while the
+      // app is still on the repo this call started from — the user can switch
+      // repositories while `validateRepo` runs, and an unguarded write would yank
+      // them back into the previous repo's worktree. The toast stays
+      // unconditional: the validation failed wherever they are now.
+      //
+      // `stillWanted` covers what the repo check can't: a caller sequencing
+      // several opens (the branch switcher) can have the user pick again while
+      // THIS validate runs, and the repo is unchanged in that case. A caller
+      // whose open stands alone passes nothing.
+      const firedOn = useUiStore.getState().repoPath;
       try {
         const info = await validateRepo(path);
+        if (useUiStore.getState().repoPath !== firedOn) return false;
+        if (stillWanted && !stillWanted()) return false;
         openRepo(info);
+        return true;
       } catch (e) {
         toastError(e);
+        return false;
       }
     },
     [openRepo],
