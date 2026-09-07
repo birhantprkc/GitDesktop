@@ -469,6 +469,16 @@ The **Changes** tab ({{kbd:tab-changes}}) lists your modified files, split into
   palette ({{kbd:command-palette}}) for Stage / Unstage selected files.
 - Filter the list by path, or by category (new / modified / deleted, included /
   excluded) with the funnel button.
+- **Discard all changes…** clears the whole working tree after a confirm. It sits on the
+  changes list's own {{secondaryclick}} menu (over the header or the empty space below
+  the files), in the branch ⋮ menu beside **Stash all changes…**, and in the command
+  palette ({{kbd:command-palette}}). Tracked files go back to the last commit, and untracked
+  files move to the **recycle bin**, so they stay recoverable. It runs as one operation
+  on the snapshot it took when you confirmed, so nothing staged or written midway is
+  swept away without a recycle-bin copy. On a large working tree that can take a while,
+  and another GitDesktop action started meanwhile waits for it: if the discard is still
+  going after ten seconds, that action stops with *A discard is still running — try
+  again when it finishes.* rather than landing partway through.
 
 ## The diff viewer
 
@@ -1587,7 +1597,12 @@ Copilot, opencode) get the tools through GitDesktop attaching to the run as a **
 MCP server**. **HTTP/API models** (Anthropic, OpenAI, Google AI Studio,
 OpenAI-compatible, OpenRouter, Ollama) get a **native, read-only tool loop**
 instead — with **no review workspace to prepare**, so those reviews start instantly
-(no "Preparing review workspace…" wait).
+(no "Preparing review workspace…" wait). A CLI agent review does prepare one, but only
+once per repository: a single review workspace is shared by all of that repository's
+worktrees and re-pointed at each new commit, so "Preparing review workspace…" is
+near-instant after the first review (a second review running at the same time in
+the same repository prepares its own temporary workspace). A workspace left untouched for about a
+week is reclaimed on startup, and the next review builds a fresh one.
 Either way it's **read-only end to end** — only read tools exist in the loop, so the
 reviewer can explore but never modify — and the status line shows what it's reading as it
 goes. An agentic review reads your repository directly, so your **AI ignore patterns**

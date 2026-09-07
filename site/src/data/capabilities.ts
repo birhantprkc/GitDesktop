@@ -57,6 +57,7 @@ export const capabilities: Capability[] = [
     group: "Diffs & staging",
     label:
       "Raw ⇄ Preview toggle on markdown & MDX diffs — read the change as rendered prose",
+    highlight: true,
   },
   {
     group: "Diffs & staging",
@@ -402,6 +403,11 @@ export const capabilities: Capability[] = [
     label:
       "Worktree manager — create, switch, rename, lock, promote & remove, with a last-active time per worktree",
     highlight: true,
+  },
+  {
+    group: "Repository & workspace",
+    label:
+      "Open a branch's worktree from its row in the branch list, with the worktree actions on the branch's context menu",
   },
   {
     group: "Repository & workspace",

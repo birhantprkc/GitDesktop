@@ -52,6 +52,9 @@ instead, see [Development](#development).
   [Bitbucket Cloud](#bitbucket-cloud), each with PRs/MRs, CI, and project
   settings in the same panels; [issues in-app](#issues-and-to-dos) on GitHub
   and GitLab, or via [Jira](#jira-cloud-issues) on Bitbucket.
+- **[My work](#my-work), one inbox across repos**: your open pull
+  requests, review requests, and issues from every repository you've
+  added, with Enter opening each right where the work lives.
 - **A [GitHub Actions cockpit](#github-actions)**: runs, jobs, steps,
   re-run / cancel / dispatch (from the run or a right-click on its row),
   failed-step logs, and AI debugging.
@@ -67,6 +70,9 @@ instead, see [Development](#development).
 - **Deep git tooling**: [interactive rebase](#history),
   [merge prediction](#branches), lost-stash recovery, a worktree manager, and
   bulk branch cleanup.
+- **[Markdown, previewed in the diff](#changes-and-commits)**: a
+  Raw / Preview toggle renders markdown and MDX changes anywhere you
+  review local diffs.
 - **Keyboard-first, privacy-first**: rebindable shortcuts, a command palette,
   keys in the OS keychain, and one switch that
   [hides every AI surface](#ai-configuration).
@@ -366,6 +372,12 @@ in one click.
   Request changes — all three always shown, one that isn't wired up yet
   disabled and saying what it's waiting on), inserting a
   **provider-correct suggestion** pre-filled with the selected code.
+- **An unfinished GitHub review** (one you started on github.com or with
+  another tool and never submitted) says so up front: a notice at the top of
+  the pull request offers **Finish on GitHub**, which opens the page where the
+  draft can be submitted, and **Discard on GitHub…**, which deletes the review
+  and its draft comments after a confirm. A started review is never stranded,
+  and its drafts stay out of the app's threads until you submit it.
 - **Commit-level comments**: the Commits tab is arrow-navigable; open a
   commit for its full message, per-file diffs, and a whole-commit thread
   plus line-anchored comments you can add, edit, and delete (a real
@@ -618,6 +630,23 @@ offer to clone the fork), or **star** it (GitHub & GitLab), without ever
 knowing the URL. **Fork** only shows on a repository that isn't already
 yours, so on Bitbucket (where Explore lists just workspaces you belong to)
 it doesn't normally appear. Fully keyboard-navigable.
+
+### My work
+
+A cross-repo inbox of your open **GitHub** pull requests and issues:
+anything you authored, were assigned, were mentioned in, or commented on,
+plus anything awaiting your review. Newest first, so what's waiting on you
+is one screen away instead of one repository at a time. Narrow it with the
+**All / Pull requests / Issues** tabs and a filter box that takes arrow
+keys and Enter, then press Enter on a row: an item from a repository
+you've added to GitDesktop usually opens right in the app, and the ↗ marks
+the rows that will open on GitHub instead. A pull request usually lands in the
+**worktree** its head branch is checked out in (when GitDesktop can
+resolve that in time), so you arrive in the checkout the work lives in; **Shift+Enter** (or *Open in
+main workspace* on the row's right-click menu) takes you to the main
+workspace instead. Read-only, with a **Refresh** in the header and *Open
+on GitHub* / *Copy link* alongside. Reach it with `Ctrl`/`⌘`+`Shift`+`M`,
+from the welcome screen, or from the command palette (*My work*).
 
 ### GitLab
 
@@ -953,19 +982,6 @@ review via its subscription login. The full list is under
 - **Integrations**: open in any editor or terminal (auto-detected, point at
   any executable, or set a full custom command with a `{path}` placeholder),
   and tunable OS notifications for PR activity, checks, and CI runs.
-- **My work**: a cross-repo inbox of your open **GitHub** pull requests and
-  issues (authored, assigned, mentioned, commented on, or awaiting your
-  review), newest first, so what's waiting on you is one screen away instead
-  of one repository at a time. Open it with `Ctrl`/`⌘`+`Shift`+`M`, from the
-  welcome screen, or from the command palette (*My work*), narrow it with
-  **All / Pull requests / Issues** tabs and a filter box that takes arrow keys
-  and Enter, and press Enter on a row: an item from a repository you've added
-  to GitDesktop usually opens right in the app, and the ↗ marks the rows that
-  will open on GitHub instead. A pull request usually lands in the **worktree**
-  its head branch is checked out in, so you arrive in the checkout the work
-  lives in. Read-only, with a **Refresh** in the header and a right-click menu
-  for *Open in main workspace* (on a pull request from a repository you've
-  added) / *Open on GitHub* / *Copy link*.
 - **Activity and notifications**: a persistent bell in the header collects
   terminal events (a finished review, checks passing/failing, a PR
   approved/commented/merged, a review requested from you, a completed CI
