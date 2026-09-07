@@ -33,3 +33,7 @@ paths:
   hidden `<Activity>` tab re-mounts on show.
 - Docs-sync rides the same change: README bullet → site capabilities → help
   `content.ts` → `changelog.d/` fragment (never hand-edit CHANGELOG.md's Unreleased).
+- Typecheck = `pnpm exec tsc -b --noEmit` (or `pnpm build`) — plain `tsc --noEmit` is a
+  NO-OP in this repo (project references) and passes without checking anything.
+- Untrusted JSON in TS derivers (CLI output, forge payloads): `typeof`-guard every
+  field and try/catch per item — one malformed record must never blank the list.

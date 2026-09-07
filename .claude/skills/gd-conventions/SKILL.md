@@ -39,6 +39,7 @@ Where this file and generic best practice disagree, this file wins.
 
 ```sh
 pnpm build                             # tsc + bundle — the frontend gate
+pnpm exec tsc -b --noEmit              # typecheck alone — plain `tsc --noEmit` is a NO-OP here (project refs); only -b checks
 pnpm exec biome check ./src/           # lint/format CHECK (no mutation)
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
