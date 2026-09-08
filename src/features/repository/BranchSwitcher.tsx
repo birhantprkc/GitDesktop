@@ -29,6 +29,7 @@ import { Input } from "@/components/ui/input";
 import {
   isDeletionBlocked,
   isMergeMethodAllowed,
+  isPromotionBranch,
   requiresPullRequest,
 } from "@/lib/branch-rules/match";
 import {
@@ -391,6 +392,12 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const lockCurrent = currentName
     ? requiresPullRequest(rulesConfig, currentName)
     : false;
+  // A promotion branch takes its changes through promotions, so the one-click
+  // update from the default branch is withheld (the current-branch twin of the
+  // per-row `rowPromotion`).
+  const currentPromotion = Boolean(
+    currentName && isPromotionBranch(rulesConfig, currentName),
+  );
   const canMergeIntoCurrent =
     !lockCurrent &&
     (currentName
@@ -826,12 +833,15 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     // still exists, and mid-removal is `refuseWhileLeaving`'s job), but a miss
     // is worthless from a list that is unanswered or in flight, because
     // react-query serves the previous data through a refetch and every worktree
-    // mutation invalidates this key. Routed through `fetchQuery` on that same
-    // key so a click during the refetch JOINS it instead of racing it with a
-    // second `git worktree list`. A failed lookup falls through to the ordinary
-    // checkout, where git refuses with its own message. Local rows only: a
-    // remote-only row's name has no local branch by construction, so no
-    // worktree can hold it and the lookup would only add a subprocess.
+    // mutation invalidates this key. (The header's always-on observer keeps the
+    // key warm under the hook's 30s staleTime, so a miss inside that window is
+    // trusted; git's own checkout refusal backstops it.) Routed through
+    // `fetchQuery` on that same key so a click during the refetch JOINS it
+    // instead of racing it with a second `git worktree list`. A failed lookup
+    // falls through to the ordinary checkout, where git refuses with its own
+    // message. Local rows only: a remote-only row's name has no local branch
+    // by construction, so no worktree can hold it and the lookup would only
+    // add a subprocess.
     if (
       remote === null &&
       !wtPath &&
@@ -1007,9 +1017,9 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
       // git refuses to delete the checked-out branch: move off it first — onto a
       // branch not already occupied by another worktree (that checkout fails too).
       if (deleteTarget === currentName) {
-        // Fetch occupancy FRESH: the cached `worktreeByBranch` is gated on the
-        // popover or the cleanup dialog being open, and the `delete-branch`
-        // hotkey opens neither — leaving the map empty and the guard moot.
+        // Fetch occupancy FRESH: `worktreeByBranch` only observes its query
+        // while the popover or cleanup dialog is open, and even a warm cache
+        // (the header keeps one now) can be stale for a guard this destructive.
         let occupied: Set<string>;
         try {
           const wts = await listUserWorktrees(repoPath);
@@ -1234,6 +1244,22 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     if (!defaultName || target === defaultName) return;
     const base = defaultName;
     setOpen(false);
+    // The guard below reads not-a-promotion from the stand-in config while the
+    // rules are still loading, so it would pass vacuously — refuse instead of
+    // inverting a flow a settled rule names as promotion.
+    if (rulesSettling) {
+      toast.error("Branch rules are still loading — try again in a moment");
+      return;
+    }
+    // The doors into this are already disabled for promotion branches, but a
+    // rule can change under an open menu — and this is the only refusal the
+    // hotkey path passes through.
+    if (isPromotionBranch(rulesConfig, target)) {
+      toast.error(
+        `${target} is a promotion branch — it takes changes through promotions, not updates from ${base}`,
+      );
+      return;
+    }
     try {
       const outcome = await updateBranchFrom.mutateAsync({
         branch: target,
@@ -1450,6 +1476,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
       return headUnread ?? "HEAD is detached — there's no branch to update.";
     if (defaultName === currentName) return `You're already on ${defaultName}.`;
     if (busy) return "Another git operation is running.";
+    // The remaining arm is the promotion rule, which the label already states.
     return null;
   })();
   // The branch-count rows below share a shape: an unanswered branch list counts
@@ -1615,7 +1642,13 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     () => {
       if (currentName) void doUpdateFromDefault(currentName);
     },
-    Boolean(defaultName && defaultName !== currentName && !busy),
+    Boolean(
+      defaultName &&
+        defaultName !== currentName &&
+        !busy &&
+        currentName &&
+        !currentPromotion,
+    ),
   );
   const defaultBranchRow = allBranches.find((b) => b.name === defaultName);
   // The palette's own route to the same merge the row menu offers — so it needs
@@ -1760,6 +1793,9 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     const div = divByName.get(branch.name);
     const canUpdate = Boolean(defaultName) && branch.name !== defaultName;
     const deletionBlocked = isDeletionBlocked(rulesConfig, branch.name);
+    // A promotion branch takes its changes through promotions, so the one-click
+    // update from the default branch is withheld.
+    const rowPromotion = isPromotionBranch(rulesConfig, branch.name);
     // Archiving hides a branch from the branch surfaces, so it's refused for a
     // branch that is somewhere in use: the one you're on, the default, and one
     // another worktree has checked out. Unarchiving is never refused — an
@@ -2101,10 +2137,11 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
             <>
               {canUpdate && (
                 <ContextMenuItem
-                  disabled={busy}
+                  disabled={busy || rowPromotion}
                   onClick={() => void doUpdateFromDefault(branch.name)}
                 >
                   Update from {defaultName}
+                  {rowPromotion ? " (promotion branch)" : ""}
                 </ContextMenuItem>
               )}
               {/* Pull the branch's own upstream in without switching — the star
@@ -2669,7 +2706,8 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                     !defaultName ||
                     !currentName ||
                     defaultName === currentName ||
-                    busy
+                    busy ||
+                    currentPromotion
                   }
                   reason={updateFromDefaultBlockedReason}
                   onClick={() => {
@@ -2677,6 +2715,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                   }}
                 >
                   Update from {defaultName ?? "default branch"}
+                  {currentPromotion ? " (promotion branch)" : ""}
                 </MenuRow>
                 <MenuRow
                   disabled={otherBranches.length === 0 || !canMergeIntoCurrent}
