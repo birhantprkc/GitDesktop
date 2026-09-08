@@ -9,7 +9,7 @@
 // Node's stdlib test runner and node: imports only, no dev dependency, so the
 // CI `guards` job runs `node --test "scripts/*.test.mjs"` with no install step.
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -25,7 +25,11 @@ import {
   parseRegistered,
   staleAllowlistEntries as staleCommandEntries,
 } from "./check-dead-surface.mjs";
-import { CARRIERS, missingSentinels } from "./check-rule-mirrors.mjs";
+import {
+  CARRIERS,
+  MOUNTED_CARRIERS,
+  missingSentinels,
+} from "./check-rule-mirrors.mjs";
 import {
   checkCompareEndpoints,
   checkRefspecTemplates,
@@ -1927,5 +1931,21 @@ test("every carrier path the gate checks exists on disk", () => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   for (const carrier of CARRIERS) {
     assert.ok(existsSync(join(root, carrier)), `missing carrier: ${carrier}`);
+  }
+});
+
+test("a mounted carrier, when present, still states the whole rule", () => {
+  // Mounted carriers exist only behind the owner's junction — also the only
+  // place their drift can be authored — so the suite gates them exactly where
+  // it can and skips them in clones, the same split the gate itself makes.
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  for (const carrier of MOUNTED_CARRIERS) {
+    const path = join(root, carrier);
+    if (!existsSync(path)) continue;
+    assert.deepEqual(
+      missingSentinels(readFileSync(path, "utf8")).map((s) => s.name),
+      [],
+      `mounted carrier lost the rule: ${carrier}`,
+    );
   }
 });

@@ -1,14 +1,20 @@
 #!/usr/bin/env node
-// Drift gate for the git-whitelist hard rule, which lives in FIVE carriers by
+// Drift gate for the git-whitelist hard rule, which lives in five carriers by
 // design — the canonical playbook, its always-loaded excerpt, the repo
 // AGENTS.md that agents outside Claude auto-load, and the two agent definitions
 // that restate it as their own charter. Two review findings in one round came
 // from a rule changing in one carrier and not the others, so the class ships
 // its guard: each carrier must still state the whitelist's core.
+// The agent definitions are junction-mounted from the owner's private skills
+// repo (personal workflow, not shipped with the project), so they gate as
+// MOUNTED_CARRIERS: sentinel-checked whenever present — always true on the
+// owner's machine, the only place their drift can be authored — and skipped
+// with a note in clones and CI, which have no junction.
 // A sixth statement — the codex spec preamble in
-// .claude/skills/delegate/references/codex-implementer.md — is deliberately
-// condensed for a prompt and is NOT sentinel-matchable, so it stays out of
-// CARRIERS and is kept in sync by hand; trimming it never trips this gate.
+// .claude/skills/delegate/references/codex-implementer.md (junction-mounted
+// likewise; not tracked here) — is deliberately condensed for a prompt and is
+// NOT sentinel-matchable, so it stays out of the carrier lists and is kept in
+// sync by hand; trimming it never trips this gate.
 //
 // PRESENCE, not equality: the copies word the rule differently on purpose (one
 // is a numbered hard rule, one a bullet, one prose for a different audience),
@@ -24,17 +30,26 @@
 // negative control by hand: copy the carriers, mutate one, watch it go red.
 // The committed controls live in scripts/checks.test.mjs and drive
 // `missingSentinels` in memory, touching no disk.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Every file that states the git-whitelist rule. */
+/** Tracked files that state the git-whitelist rule — present in every clone. */
 export const CARRIERS = [
   ".claude/skills/gd-conventions/SKILL.md",
   ".claude/rules/git-safety.md",
   "AGENTS.md",
+];
+
+/**
+ * Junction-mounted carriers: same rule, same sentinels, but the files live in
+ * the owner's private skills repo and only exist where the junction does.
+ * Absent ⇒ skipped with a note (clones, CI); present ⇒ gated exactly like
+ * CARRIERS.
+ */
+export const MOUNTED_CARRIERS = [
   ".claude/agents/implementer.md",
   ".claude/agents/spec-reviewer.md",
 ];
@@ -87,7 +102,7 @@ function main() {
     : REPO_ROOT;
 
   let failed = false;
-  for (const carrier of CARRIERS) {
+  const gate = (carrier) => {
     let text;
     try {
       text = readFileSync(join(root, carrier), "utf8");
@@ -95,14 +110,14 @@ function main() {
       failed = true;
       process.stderr.write(`rule-mirrors: FAIL — cannot read ${carrier}\n`);
       process.stderr.write(`    ${err.message}\n`);
-      continue;
+      return;
     }
     const missing = missingSentinels(text);
     if (missing.length === 0) {
       process.stdout.write(
         `rule-mirrors: OK ${carrier} (${SENTINELS.length} sentinels)\n`,
       );
-      continue;
+      return;
     }
     failed = true;
     process.stderr.write(
@@ -112,6 +127,15 @@ function main() {
       process.stderr.write(`  missing: ${s.name}\n`);
       process.stderr.write(`    ${s.fix}\n`);
     }
+  };
+
+  for (const carrier of CARRIERS) gate(carrier);
+  for (const carrier of MOUNTED_CARRIERS) {
+    if (!existsSync(join(root, carrier))) {
+      process.stdout.write(`rule-mirrors: SKIP ${carrier} (not mounted)\n`);
+      continue;
+    }
+    gate(carrier);
   }
 
   // Not `process.exit`: it can truncate a pending pipe write, losing the very
