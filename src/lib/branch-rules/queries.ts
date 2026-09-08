@@ -19,6 +19,9 @@ export function useBranchRules(repo: string) {
     queryKey: branchRulesKey(repo),
     queryFn: () => loadBranchRules(repo),
     staleTime: Number.POSITIVE_INFINITY,
+    // Local read: the default "online" mode parks it while the OS reports no
+    // connection, which would hold every rules-settling gate closed forever.
+    networkMode: "always",
   });
 }
 
@@ -26,6 +29,8 @@ export function useSaveBranchRules(repo: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (config: BranchRulesConfig) => saveBranchRules(repo, config),
+    // Local write — see useBranchRules: "online" mode would park it offline.
+    networkMode: "always",
     onSettled: () =>
       queryClient.invalidateQueries({ queryKey: branchRulesKey(repo) }),
   });
@@ -40,6 +45,8 @@ export function useSharedBranchRules(repo: string) {
     // The file can change out from under us (pull, branch switch), so let it
     // refetch on focus rather than caching forever.
     staleTime: 30_000,
+    // Local read — see useBranchRules: "online" mode would park it offline.
+    networkMode: "always",
   });
 }
 
@@ -48,6 +55,8 @@ export function useSaveSharedBranchRules(repo: string) {
   return useMutation({
     mutationFn: (config: BranchRulesConfig) =>
       saveSharedBranchRules(repo, config),
+    // Local write — see useBranchRules: "online" mode would park it offline.
+    networkMode: "always",
     onSettled: () =>
       queryClient.invalidateQueries({ queryKey: sharedBranchRulesKey(repo) }),
   });

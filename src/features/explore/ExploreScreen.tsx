@@ -2,6 +2,7 @@ import { ArrowLeftIcon } from "@phosphor-icons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   type KeyboardEvent as ReactKeyboardEvent,
+  useCallback,
   useEffect,
   useEffectEvent,
   useMemo,
@@ -321,6 +322,10 @@ function YoursResults({
   }
   return (
     <ResultsList
+      // A cached provider resolves synchronously, so the list never unmounts
+      // between providers — key it or the surviving virtualizer carries one
+      // account's scroll offset onto the other's repositories.
+      key={provider}
       rows={rows}
       selected={selected}
       onSelect={onSelect}
@@ -348,10 +353,17 @@ function SearchResults({
 }) {
   const search = useForgeSearchRepos(provider, query, sort, true);
 
-  const repos = useMemo<ForgeSearchRepo[]>(
-    () => search.data?.pages.flatMap((p) => p.repos) ?? [],
-    [search.data],
-  );
+  // Dedupe by full name: the forge's index can shift between page fetches and
+  // repeat a repo, which the content-derived row keys would collide on — one
+  // React key and one measurement entry for two rows.
+  const repos = useMemo<ForgeSearchRepo[]>(() => {
+    const seen = new Set<string>();
+    return (search.data?.pages.flatMap((p) => p.repos) ?? []).filter((r) => {
+      if (seen.has(r.fullName)) return false;
+      seen.add(r.fullName);
+      return true;
+    });
+  }, [search.data]);
   // Search results are already provider-ranked (best/stars/updated), so present
   // them flat — no owner grouping, which would fight the ranking.
   const rows = useMemo<ExploreRow[]>(
@@ -373,6 +385,10 @@ function SearchResults({
   }
   return (
     <ResultsList
+      // A cached search resolves synchronously, so the list never unmounts
+      // between queries — key it on the search's identity (this hook's query-key
+      // axes) or the surviving virtualizer paints new rows at the old offset.
+      key={`${provider}:${sort}:${query}`}
       rows={rows}
       selected={selected}
       onSelect={onSelect}
@@ -423,10 +439,27 @@ function ResultsList({
   footer?: React.ReactNode;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
+  // The virtualizer keys its measurement projection on `getItemKey`'s IDENTITY,
+  // so this is re-minted per row sequence rather than per render — `rows` is
+  // memo-stable, making it the sequence's only input.
+  const getItemKey = useCallback(
+    (index: number) => {
+      const row = rows[index];
+      if (!row) return index;
+      return row.kind === "header"
+        ? `h:${row.owner}`
+        : `r:${row.repo.fullName}`;
+    },
+    [rows],
+  );
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
     estimateSize: (i) => (rows[i].kind === "header" ? 26 : 46),
+    // Key by row identity, not index: a new query replaces the rows wholesale
+    // and Load more appends, and an index key hands a 26px header the height
+    // measured for the 46px repo row that sat there before.
+    getItemKey,
     overscan: 12,
   });
 
