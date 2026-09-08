@@ -167,9 +167,11 @@ impl MarkerRoots {
 /// the ONE shared resolver the MCP server uses too, so two processes can never key a
 /// repository differently. Deliberately uncached: a stale identity would re-open the
 /// cross-worktree blindness this keying closes, and these are user-action paths where
-/// one `rev-parse` is affordable. `repo_identity` answers with its input when git
-/// cannot resolve it, so a failure degrades to plain checkout-path keying and the two
-/// roots collapse into one.
+/// one `rev-parse` is affordable. Bulk guard sites take [`roots_for_cached`] instead,
+/// which hashes the same RAW identity spelling this one does — a normalized copy would
+/// key a third root. `repo_identity` answers with its input when git cannot resolve it,
+/// so a failure degrades to plain checkout-path keying and the two roots collapse into
+/// one.
 ///
 /// Under `cfg(test)` an installed override is the ONLY resolution and is the whole root
 /// set: with none, this ERRORS instead of falling through to the real app data,
@@ -177,8 +179,8 @@ impl MarkerRoots {
 /// environment says". The override is process-wide, so a test that never installed one
 /// must neither read a concurrently-scheduled sibling's root nor mint under the
 /// developer's own app data. Every GUARD caller fails open on an unresolvable root —
-/// refusals answer `Ok`, claims and sweeps return, `is_managed_update_worktree` answers
-/// `false` — which is exactly what an un-overridden test should see. The MINT is the
+/// refusals answer `Ok`, claims and sweeps return, `clear_update_holder` answers
+/// `Ok(false)` — which is exactly what an un-overridden test should see. The MINT is the
 /// loud exception: `branches.rs::update_worktree_path` propagates the error rather than
 /// place a checkout somewhere nobody is guarding.
 pub(crate) async fn roots_for(repo_path: &str) -> AppResult<MarkerRoots> {
@@ -202,6 +204,33 @@ pub(crate) async fn roots_for(repo_path: &str) -> AppResult<MarkerRoots> {
     #[cfg(not(test))]
     {
         let identity = crate::git::repo::repo_identity(repo_path).await;
+        Ok(MarkerRoots::new(
+            crate::git::ops::identity_worktree_root_dir(&identity)?,
+            crate::git::ops::worktree_root_dir(repo_path)?,
+        ))
+    }
+}
+
+/// [`roots_for`] with the identity served from AppState's lock-key cache — for
+/// guard and claim sites that run in bulk (branch cleanup deletes one branch per
+/// call). The MINT (`branches.rs::update_worktree_path` via [`root_for`]) stays on
+/// the uncached resolver: a checkout must never be placed under a stale root, while
+/// a guard reading one degrades fail-open like every other unresolvable root.
+///
+/// Staleness shares the lock-key cache's own lifetime: an identity that changes
+/// mid-process already splits every lock domain for the repo, and a guard missing a
+/// fresh mint is bounded by the update's own pin verify (branch-tip equality before any
+/// write) — it refuses rather than corrupts.
+pub(crate) async fn roots_for_cached(state: &AppState, repo_path: &str) -> AppResult<MarkerRoots> {
+    // The test seam is `roots_for`'s alone, so the two cannot drift under an override.
+    #[cfg(test)]
+    {
+        let _ = state;
+        roots_for(repo_path).await
+    }
+    #[cfg(not(test))]
+    {
+        let identity = state.repo_identity_cached(repo_path).await;
         Ok(MarkerRoots::new(
             crate::git::ops::identity_worktree_root_dir(&identity)?,
             crate::git::ops::worktree_root_dir(repo_path)?,
@@ -429,8 +458,10 @@ pub(crate) fn is_managed_update_worktree_in(roots: &MarkerRoots, path: &str) -> 
     })
 }
 
-/// [`is_managed_update_worktree_in`] resolving the roots itself, for a single-call site
-/// that has no other use for them.
+/// [`is_managed_update_worktree_in`] resolving the roots itself. Test-only: every
+/// production scope check now runs over roots resolved through the cache its own
+/// follow-up uses, so one call can never arbitrate over two root sets.
+#[cfg(test)]
 pub(crate) async fn is_managed_update_worktree(repo_path: &str, path: &str) -> bool {
     match roots_for(repo_path).await {
         Ok(roots) => is_managed_update_worktree_in(&roots, path),
@@ -548,10 +579,11 @@ pub(crate) async fn refuse_if_any_updating(state: &AppState, repo_path: &str) ->
 /// the worktree-admin domain: a detached sweep fired here would win that domain by
 /// milliseconds and turn an operation that would have succeeded into a `Busy`.
 pub(crate) async fn refuse_if_branch_updating_no_heal(
+    state: &AppState,
     repo_path: &str,
     branch: &str,
 ) -> AppResult<()> {
-    let Ok(roots) = roots_for(repo_path).await else {
+    let Ok(roots) = roots_for_cached(state, repo_path).await else {
         return Ok(());
     };
     refuse_if_branch_updating_in(&roots, branch)
@@ -628,7 +660,10 @@ pub(crate) async fn claim_dead_update_worktree(
     repo_path: &str,
     holder: &str,
 ) -> bool {
-    if !is_managed_update_worktree(repo_path, holder).await {
+    let Ok(roots) = roots_for_cached(state, repo_path).await else {
+        return false;
+    };
+    if !is_managed_update_worktree_in(&roots, holder) {
         return false;
     }
     let path = Path::new(holder);
@@ -664,7 +699,7 @@ pub(crate) async fn claim_dead_update_worktree(
 /// markerless checkout is never claimed here. No porcelain read is needed — the lock
 /// file alone carries the proof.
 pub(crate) async fn claim_dead_updates_for_branch(state: &AppState, repo_path: &str, branch: &str) {
-    let Ok(roots) = roots_for(repo_path).await else {
+    let Ok(roots) = roots_for_cached(state, repo_path).await else {
         return;
     };
     // Nothing to heal is the overwhelmingly common case; answer it without paying for
@@ -1326,6 +1361,39 @@ mod tests {
         assert!(
             root_for("C:/repos/app").await.is_err(),
             "an un-overridden test must never resolve the real worktree root"
+        );
+    }
+
+    /// The cached variant resolves through the SAME test seam, so every guard test in
+    /// this module keeps covering every site that takes it.
+    // The serializing guard MUST span the awaits — it is what keeps the process-wide
+    // root override installed for the whole body.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn the_cached_resolver_answers_the_override_like_the_uncached_one() {
+        let (_guard, root) = temp_root("cached-roots");
+        let _serialized = test_root_lock();
+        let state = AppState::default();
+
+        let uncached = roots_for("C:/nonexistent-repo").await;
+        let cached = roots_for_cached(&state, "C:/nonexistent-repo").await;
+        assert!(
+            uncached.is_err() && cached.is_err(),
+            "with no override installed both fail closed"
+        );
+
+        let _override = TestRootOverride::set(&root);
+        let uncached = roots_for("C:/nonexistent-repo")
+            .await
+            .expect("the override resolves");
+        let cached = roots_for_cached(&state, "C:/nonexistent-repo")
+            .await
+            .expect("and the cached variant resolves too");
+        assert_eq!(cached.mint_root(), uncached.mint_root());
+        assert_eq!(
+            cached.all().collect::<Vec<_>>(),
+            uncached.all().collect::<Vec<_>>(),
+            "the cached variant sees exactly the override root set"
         );
     }
 

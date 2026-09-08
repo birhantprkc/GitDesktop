@@ -1,0 +1,1 @@
+- Cleaning up many branches at once is faster.
