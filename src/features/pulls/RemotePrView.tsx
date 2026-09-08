@@ -65,6 +65,7 @@ import { ProjectsPopover } from "@/features/conversations/ProjectsPopover";
 import { makeQuoteReply } from "@/features/conversations/quoteReply";
 import { ReactionBar } from "@/features/conversations/ReactionBar";
 import { AuthorAvatar, LabelChip } from "@/features/conversations/Thread";
+import { useCancelOnIdentityChange } from "@/features/conversations/useAiStream";
 import { useMentionCandidates } from "@/features/conversations/useMentionCandidates";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import type { LineWidget } from "@/features/diff/DiffSurface";
@@ -222,10 +223,7 @@ import {
   unmetRequiredChecks,
   useBranchRequiredChecks,
 } from "./useBranchRequiredChecks";
-import {
-  useCancelOnIdentityChange,
-  useGeneratePrDescription,
-} from "./useGeneratePrDescription";
+import { useGeneratePrDescription } from "./useGeneratePrDescription";
 import {
   composeBodyWithJiraRefs,
   composeBodyWithRefs,
@@ -3500,8 +3498,7 @@ export function RemotePrView({
         form={edit.form}
         open={edit.open}
         onOpenChange={(open) => {
-          // The dialog stays mounted, so cancel any in-flight generation when it
-          // closes (unlike the create dialogs, which unmount on close).
+          // The dialog stays mounted, so cancel any in-flight generation on close.
           if (!open) prGen.cancel();
           edit.setOpen(open);
         }}

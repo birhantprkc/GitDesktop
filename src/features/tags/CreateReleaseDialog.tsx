@@ -8,7 +8,7 @@ import {
 } from "@phosphor-icons/react";
 import { useSelector } from "@tanstack/react-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffectEvent, useRef, useState } from "react";
+import { useEffectEvent, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { LabeledGroup } from "@/components/form/labeled-group";
 import {
@@ -48,8 +48,13 @@ import {
 } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  useCancelOnIdentityChange,
+  useFinishAndSurface,
+} from "@/features/conversations/useAiStream";
 import { useMentionCandidates } from "@/features/conversations/useMentionCandidates";
 import { useAppForm } from "@/lib/form";
+import { normPath } from "@/lib/git/path";
 import {
   useBranches,
   useCreateRelease,
@@ -105,6 +110,53 @@ export function CreateReleaseDialog({
   const createRelease = useCreateRelease(repoPath);
   const githubNotes = useGithubReleaseNotes(repoPath);
   const aiNotes = useGenerateReleaseNotes(repoPath);
+  const busyGenerating = githubNotes.isPending || aiNotes.generating;
+  // The dialog is retained across repo AND tag switches, so nothing a run settles
+  // may write this form or skip its seed for the identity now on screen: the
+  // GitHub mutation validates start-vs-live identity; the AI stream is cancelled
+  // at the switch and its settle swallowed.
+  const tagIdentity = initialTag ?? "";
+  const liveTagRef = useRef(tagIdentity);
+  useLayoutEffect(() => {
+    liveTagRef.current = tagIdentity;
+  }, [tagIdentity]);
+  const settleTagRef = useRef(tagIdentity);
+  // Closing mid-generation never cancels the run: it finishes into the retained
+  // form state, and this surfaces the result while the dialog is away. Both
+  // hosts pass a plain open setter, so `onOpenChange(true)` reopens.
+  const surface = useFinishAndSurface(repoPath, open, {
+    cancel: aiNotes.cancel,
+    // The AI stream alone: the From-GitHub mutation is not what a switch aborts.
+    generating: aiNotes.generating,
+    close: () => onOpenChange(false),
+    readyTitle: "Release notes ready",
+    readyDescription: "They're waiting in the dialog.",
+    reopen: () => {
+      // A tag switch drains the latch, so the notes are gone — say so instead of
+      // opening an emptied dialog. Inert in TagsPanel, whose tagIdentity is "".
+      if (liveTagRef.current !== settleTagRef.current) {
+        toast.info(
+          `Those notes were for ${settleTagRef.current} — they were discarded when you switched tags.`,
+        );
+        return;
+      }
+      onOpenChange(true);
+    },
+  });
+  const tagSwitchAbortRef = useRef(false);
+  useCancelOnIdentityChange(tagIdentity, () => {
+    void surface.consumeSkipSeed();
+    tagSwitchAbortRef.current = aiNotes.generating;
+    aiNotes.cancel();
+  });
+  // The From-GitHub run's identity while it is in flight; nothing cancels it.
+  const ghRunIdentityRef = useRef<{ repo: string; tag: string } | null>(null);
+  const ghRunIsForThisIdentity = () => {
+    const run = ghRunIdentityRef.current;
+    return (
+      run !== null && run.repo === normPath(repoPath) && run.tag === tagIdentity
+    );
+  };
   // GitLab has no draft/pre-release/latest concepts and no auto-notes API, so
   // those checkboxes and the "From GitHub" generator hide there (AI notes still
   // work — they fall back to local commits).
@@ -197,6 +249,16 @@ export function CreateReleaseDialog({
     : "";
 
   const seedOnOpen = useEffectEvent(() => {
+    // A generation still streaming — or one that settled while the dialog was
+    // closed — leaves the notes and the rest of the draft in form state, which
+    // this reset would blank on reopen.
+    if (
+      surface.shouldSkipSeed(
+        aiNotes.generating && !tagSwitchAbortRef.current,
+      ) ||
+      (githubNotes.isPending && ghRunIsForThisIdentity())
+    )
+      return;
     form.reset(
       {
         ...RELEASE_DEFAULTS,
@@ -221,14 +283,19 @@ export function CreateReleaseDialog({
     setTagOpen(false);
   }
 
-  const busyGenerating = githubNotes.isPending || aiNotes.generating;
-
   // Awaited like the submit above: react-query drops per-call callbacks once the
   // observer loses listeners, and this dialog's host panel hides with its tab
   // while generation is still in flight.
   async function generateFromGithub() {
     if (!tagTrimmed) return;
     const requestedFor = tagTrimmed;
+    // This mutation outlives both axes, and no identity-cancel can abort it.
+    const startRepo = normPath(repoPath);
+    const startTag = tagIdentity;
+    const switchedAway = () =>
+      normPath(useUiStore.getState().repoPath ?? "") !== startRepo ||
+      liveTagRef.current !== startTag;
+    ghRunIdentityRef.current = { repo: startRepo, tag: startTag };
     let gen: GeneratedNotes;
     try {
       gen = await githubNotes.mutateAsync({
@@ -237,30 +304,81 @@ export function CreateReleaseDialog({
         previousTag: effectivePreviousTag,
       });
     } catch (e) {
+      if (switchedAway()) return;
       toastError(e);
+      // Still a settle: the typed draft has to survive one reopen for a retry.
+      surface.noteRunSettled(false);
       return;
+    } finally {
+      // The run is over on every arm, the foreign-refused ones included.
+      ghRunIdentityRef.current = null;
     }
+    // Nothing below awaits, so this one check covers every settle arm that follows.
+    if (switchedAway()) return;
     // The response belongs to the tag it was requested for — a reseeded or
     // retyped form is another release, and stale notes must not touch it.
-    if (form.getFieldValue("tag").trim() !== requestedFor) return;
+    if (form.getFieldValue("tag").trim() !== requestedFor) {
+      surface.noteRunSettled(false);
+      return;
+    }
     if (gen.body) form.setFieldValue("notes", gen.body);
     if (gen.name && !form.getFieldValue("title").trim()) {
       form.setFieldValue("title", gen.name);
     }
     notesEditorRef.current?.showPreview();
+    // Only a body is notes "waiting in the dialog" — a name-only response has
+    // nothing for the toast to promise.
+    settleTagRef.current = startTag;
+    surface.noteRunSettled(Boolean(gen.body));
   }
 
   function generateWithAi() {
     if (!tagTrimmed) return;
+    // Same requestedFor rule as From-GitHub: a retyped form is another release.
+    const requestedFor = tagTrimmed;
     form.setFieldValue("notes", "");
-    aiNotes.generate({
-      tag: tagTrimmed,
-      target: showTarget ? target.trim() : tagTrimmed,
-      previousTag: effectivePreviousTag,
-      repoName,
-      isGitHub,
-      onResult: (body) => form.setFieldValue("notes", body),
-    });
+    aiNotes
+      .generate({
+        tag: requestedFor,
+        target: showTarget ? target.trim() : requestedFor,
+        previousTag: effectivePreviousTag,
+        repoName,
+        isGitHub,
+        onResult: (body) => {
+          if (form.getFieldValue("tag").trim() === requestedFor) {
+            form.setFieldValue("notes", body);
+          }
+        },
+      })
+      .then(
+        (final) => {
+          // The tag switch's own abort settles here — swallow it, never re-latch.
+          // Exactly one swallow consumes a settle; the repo flag can't also arm
+          // while tag hosts unmount on a repo switch — else, per-run tokens.
+          if (tagSwitchAbortRef.current) {
+            tagSwitchAbortRef.current = false;
+            return;
+          }
+          if (form.getFieldValue("tag").trim() !== requestedFor) {
+            surface.noteRunSettled(false);
+            return;
+          }
+          // Resolves with the COMPLETE notes, or null — an aborted stream still
+          // fired `onResult` with its partials, so that can't be the signal.
+          settleTagRef.current = tagIdentity;
+          surface.noteRunSettled(final !== null);
+        },
+        // Two-arm, never a trailing .catch: a settle must be reported exactly
+        // once, and a throw in the arm above must not report a second time. The
+        // swallow repeats here — only a settle clears the flag.
+        () => {
+          if (tagSwitchAbortRef.current) {
+            tagSwitchAbortRef.current = false;
+            return;
+          }
+          surface.noteRunSettled(false);
+        },
+      );
   }
 
   // The generate chord drives the AI item only — never the From-GitHub one, and
@@ -282,6 +400,10 @@ export function CreateReleaseDialog({
     ? aiNotesHintTitle
     : "Enable AI in Settings first.";
 
+  // The one submit gate, shared by the button and the form's native submit:
+  // Enter must submit exactly when the button would.
+  const submitBlocked = !tagTrimmed || busyGenerating;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* A fixed height (not a cap): release bodies routinely run thousands of
@@ -294,6 +416,7 @@ export function CreateReleaseDialog({
           className="flex min-h-0 flex-1 flex-col gap-4"
           onSubmit={(e) => {
             e.preventDefault();
+            if (submitBlocked) return;
             form.handleSubmit();
           }}
         >
@@ -543,7 +666,7 @@ export function CreateReleaseDialog({
               Cancel
             </Button>
             <form.AppForm>
-              <form.SubmitButton disabled={!tagTrimmed || busyGenerating}>
+              <form.SubmitButton disabled={submitBlocked}>
                 {draft ? "Save draft" : "Publish release"}
               </form.SubmitButton>
             </form.AppForm>

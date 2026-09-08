@@ -59,6 +59,7 @@ import {
   openWithDefault,
   openWithProgram,
 } from "@/lib/git/api";
+import { normPath } from "@/lib/git/path";
 import {
   EMPTY_NAMESPACES,
   forgeFeatureReady,
@@ -278,17 +279,37 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
     openRepoSettings();
   });
 
+  // Whether the admin gate has an answer yet — settled either way, error
+  // included, so a failed probe releases the request instead of pinning it.
+  const settingsGateResolved =
+    !gh.isPending && (!settingsReady || !admin.isPending);
+
   // A one-shot deep link raised by another surface (the Findings tab's "turn on
   // Dependabot" card). Not keyed on the dialog's open state, so re-opening the
   // dialog can never re-fire it.
   useEffect(() => {
     if (!repoSettingsRequest) return;
-    // Same admin gate as the menu item: the dialog is admin-only, so a request
-    // raised before the gate was known must not open it. Cleared either way —
-    // a refused request is dropped rather than left to fire later.
-    if (canOpenRepoSettings) openRepoSettingsAt(repoSettingsRequest);
+    // The request names the repo it was raised for. CROSS_REPO_RESET already
+    // nulls it on every repo switch, so this drop is the backstop for a route
+    // that ever sets repoPath without the reset — never fire it cross-repo.
+    if (repoSettingsRequest.repo !== normPath(repoPath)) {
+      clearRepoSettingsRequest();
+      return;
+    }
+    // Same admin gate as the menu item: the dialog is admin-only. An unresolved
+    // gate HOLDS the request — clearing mid-probe drops a deep link whose toast
+    // is already gone — and a resolved refusal drops it rather than letting it
+    // fire later.
+    if (!settingsGateResolved) return;
+    if (canOpenRepoSettings) openRepoSettingsAt(repoSettingsRequest.section);
     clearRepoSettingsRequest();
-  }, [repoSettingsRequest, clearRepoSettingsRequest, canOpenRepoSettings]);
+  }, [
+    repoSettingsRequest,
+    clearRepoSettingsRequest,
+    canOpenRepoSettings,
+    settingsGateResolved,
+    repoPath,
+  ]);
 
   // The palette and the Findings deep link have no menu to warm on, so the open
   // itself warms too; the shared import means this and the menu preload resolve
@@ -633,7 +654,10 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
         ) : (
           <Suspense
             fallback={
-              <RepoSettingsDialogFallback onOpenChange={closeRepoSettings} />
+              <RepoSettingsDialogFallback
+                repoPath={repoPath}
+                onOpenChange={closeRepoSettings}
+              />
             }
           >
             <RepoSettingsDialog

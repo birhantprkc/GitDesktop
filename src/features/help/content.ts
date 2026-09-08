@@ -2472,6 +2472,17 @@ AI streams into the same inputs you'd type in, so it's always editable: **commit
 messages**, **branch names**, **PR titles and descriptions**, **issue drafts**, **release
 notes**, and **repository descriptions**.
 
+Closing a dialog leaves its generation running. Draft an issue, a pull request, or
+release notes, close the dialog while it streams, and the run still finishes: a toast
+announces the draft when it lands, its **View** action brings the dialog back, and
+everything is waiting there, your own typing included. Switching repositories discards a
+draft that's still in flight, since it belongs to the repository it started in.
+
+A repository description generated in **Repository settings** keeps running across a
+repository switch, held for the repository it started in. Close that dialog while it
+runs and a toast tells you when the description is ready; **View** reopens it on
+**General**, and from another repository it names the one to switch back to.
+
 ## Instructions & privacy
 
 - **Instructions** steer every generation and every AI review. Set **global**

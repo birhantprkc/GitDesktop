@@ -12,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useFinishAndSurface } from "@/features/conversations/useAiStream";
 import { REVIEWER_NOTES_MARKER } from "@/lib/ai/notes-context";
 import { triggerAutomations } from "@/lib/automations/runner";
 import { required, useAppForm } from "@/lib/form";
@@ -62,6 +63,18 @@ export function CreateLocalPrDialog({
   const createPr = useCreateLocalPr(repoPath);
   const { generate, cancel, generating } = useGeneratePrDescription(repoPath);
   const aiEnabled = useAiEnabled();
+  // Closing mid-generation never cancels the run: it finishes into the retained
+  // form state, and this surfaces the result while the dialog is away. The host's
+  // onOpenChange only ever CLOSES, so the reopen goes through the store action —
+  // seedless, since the skip-seed latch keeps the retained draft.
+  const surface = useFinishAndSurface(repoPath, open, {
+    cancel,
+    generating,
+    close: () => onOpenChange(false),
+    readyTitle: "PR description ready",
+    readyDescription: "It's waiting in the dialog.",
+    reopen: () => useUiStore.getState().openLocalPrCreate(),
+  });
   // Linked issues: real repo issues to reference. A local PR's `Closes #N` lines
   // survive promotion verbatim into the real forge PR, so these become real
   // closing refs later — intended. Non-AI surface (shown under Hide-AI too),
@@ -176,6 +189,10 @@ export function CreateLocalPrDialog({
   // keepDefaultValues: otherwise the per-render options sync clobbers the
   // seeded head/base back to empty (untouched form).
   const seedOnOpen = useEffectEvent(() => {
+    // A generation still streaming — or one that settled while the dialog was
+    // closed — leaves the whole draft in form state, which this reset would blank
+    // on reopen.
+    if (surface.shouldSkipSeed(generating)) return;
     // Reset the linked-issue chips (and their dismissed/probed refs) to empty —
     // the dialog opens with no seeded body refs; extraction/AI seeding then
     // repopulates from the head branch + commits.
@@ -251,6 +268,12 @@ export function CreateLocalPrDialog({
       [],
       notes.trim() || undefined,
       buildIssueCandidates(),
+    ).then(
+      // Resolves with the COMPLETE draft, or null on bail/abort/error.
+      (final) => surface.noteRunSettled(final !== null),
+      // Two-arm, never a trailing .catch: a settle must be reported exactly
+      // once, and a throw in the arm above must not report a second time.
+      () => surface.noteRunSettled(false),
     );
   }
   // Context-sensitive reuse of the `generate-commit-message` binding while this
@@ -261,6 +284,9 @@ export function CreateLocalPrDialog({
     run: aiEnabled ? runGenerate : undefined,
   });
   const generateHint = generateChord.hint;
+  // The one submit gate, shared by the button, the mod+enter chord, and the
+  // form's native submit: Enter must submit exactly when the button would.
+  const submitBlocked = generating;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -279,7 +305,7 @@ export function CreateLocalPrDialog({
         onKeyDown={(e) => {
           if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
             e.preventDefault();
-            if (!generating) form.handleSubmit();
+            if (!submitBlocked) form.handleSubmit();
             return;
           }
           // The generate chord runs this dialog's own Generate while it's open.
@@ -298,6 +324,7 @@ export function CreateLocalPrDialog({
           className="flex min-h-0 min-w-0 flex-col gap-4"
           onSubmit={(e) => {
             e.preventDefault();
+            if (submitBlocked) return;
             form.handleSubmit();
           }}
         >
@@ -450,7 +477,7 @@ export function CreateLocalPrDialog({
               Cancel
             </Button>
             <form.AppForm>
-              <form.SubmitButton disabled={generating} title={SUBMIT_HINT}>
+              <form.SubmitButton disabled={submitBlocked} title={SUBMIT_HINT}>
                 Create local PR
               </form.SubmitButton>
             </form.AppForm>

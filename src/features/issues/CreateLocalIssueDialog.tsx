@@ -1,6 +1,6 @@
 import { SparkleIcon, XIcon } from "@phosphor-icons/react";
 import { useSelector } from "@tanstack/react-store";
-import { useEffectEvent } from "react";
+import { useEffectEvent, useRef } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useFinishAndSurface } from "@/features/conversations/useAiStream";
 import { required, useAppForm } from "@/lib/form";
 import { useGenerateChord } from "@/lib/hotkeys/useGenerateChord";
 import { useCreateLocalIssue } from "@/lib/issues/queries";
@@ -37,6 +38,18 @@ export function CreateLocalIssueDialog({
   const repoName = useUiStore((s) => s.repoName) ?? "";
   const aiEnabled = useAiEnabled();
   const { generate, cancel, generating } = useGenerateIssueDraft(repoPath);
+  // Closing mid-generation never cancels the run: it finishes into the retained
+  // form state, and this surfaces the result while the dialog is away.
+  const surface = useFinishAndSurface(repoPath, open, {
+    cancel,
+    generating,
+    close: () => onOpenChange(false),
+    readyTitle: "Issue draft ready",
+    readyDescription: "It's waiting in the dialog.",
+    reopen: () => onOpenChange(true),
+  });
+  /** The serialized explicit draft the current form state was seeded from. */
+  const seededDraftRef = useRef<string | null>(null);
 
   const form = useAppForm({
     defaultValues: { title: "", body: "" },
@@ -63,23 +76,50 @@ export function CreateLocalIssueDialog({
   // keepDefaultValues: otherwise the per-render options sync clobbers the
   // reset values back to empty on an untouched form.
   const seedOnOpen = useEffectEvent(() => {
+    const key = initialDraft
+      ? JSON.stringify([initialDraft.title, initialDraft.body])
+      : null;
+    // A plan or to-do handing over new content retargets the one shared form, so
+    // a waiting or streaming run's result must not survive into it; a reopen
+    // carrying the same content is the ordinary hold path below.
+    const isNewRequest = key !== null && key !== seededDraftRef.current;
+    if (isNewRequest) {
+      if (generating) cancel();
+      void surface.consumeSkipSeed();
+    } else if (surface.shouldSkipSeed(generating)) {
+      // A generation still streaming — or one that settled while the dialog was
+      // closed — leaves the whole draft in form state, which this reset would
+      // blank on reopen.
+      return;
+    }
     form.reset(
       { title: initialDraft?.title ?? "", body: initialDraft?.body ?? "" },
       { keepDefaultValues: true },
     );
+    seededDraftRef.current = key;
   });
   useSeedOnOpen(open, seedOnOpen);
 
   // Shared by the Draft-with-AI button and the generate chord below.
-  function runGenerate() {
-    generate({
-      notes,
-      repoName,
-      onResult: (d) => {
-        if (d.title) form.setFieldValue("title", d.title);
-        form.setFieldValue("body", d.body);
-      },
-    });
+  async function runGenerate() {
+    // `generate` resolves void and fires onResult only on a usable draft, so the
+    // flag is how the settle learns whether a result actually landed.
+    let ok = false;
+    // finally: a throw past the stream (draft extraction, these field writes)
+    // must still settle, or the switch-abort latch stays armed for the next run.
+    try {
+      await generate({
+        notes,
+        repoName,
+        onResult: (d) => {
+          ok = true;
+          if (d.title) form.setFieldValue("title", d.title);
+          form.setFieldValue("body", d.body);
+        },
+      });
+    } finally {
+      surface.noteRunSettled(ok);
+    }
   }
   // The generate chord drafts this issue while the dialog is open. It's mounted
   // on DialogContent, not the <form>: the X close button is a form SIBLING
@@ -92,6 +132,9 @@ export function CreateLocalIssueDialog({
     enabled: aiEnabled && !generating && notes.trim() !== "",
     run: runGenerate,
   });
+  // The one submit gate, shared by the button and the form's native submit:
+  // Enter must submit exactly when the button would.
+  const submitBlocked = generating;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -103,6 +146,7 @@ export function CreateLocalIssueDialog({
           className="flex min-h-0 min-w-0 flex-col gap-4"
           onSubmit={(e) => {
             e.preventDefault();
+            if (submitBlocked) return;
             form.handleSubmit();
           }}
         >
@@ -179,7 +223,7 @@ export function CreateLocalIssueDialog({
               Cancel
             </Button>
             <form.AppForm>
-              <form.SubmitButton disabled={generating}>
+              <form.SubmitButton disabled={submitBlocked}>
                 Create local issue
               </form.SubmitButton>
             </form.AppForm>
