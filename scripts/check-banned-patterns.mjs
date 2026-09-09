@@ -228,14 +228,11 @@ const INLINE_CLIP_TITLE_RE = new RegExp(
 // a same-tag [^>] bound, because prop expressions carry `=>` arrows; the
 // tempered `(?!</SelectItem\b)` step stops each scan at the item's closing
 // tag, so an adjacent picker's trigger handler can never pair across items.
-// Known false positive left open: a legal SELF-BOUNDED clip span inside an
-// item (TaskDialog's `max-w-64 truncate` interpreter-path sub-span — its own
-// width bound keeps the handler live) sits ~2× outside the window today; a
-// compacted row would fire loudly, with the allowlist as remedy. Accepted
-// evasions: an aliased or wrapped handler, a reordered/interleaved class
-// string, a wrapper component around SelectItem — and a bare text child with
-// no affordance at all, the shape most converted sites had, which no arm can
-// see.
+// Accepted evasions: an aliased or wrapped handler, a reordered/interleaved
+// class string, a wrapper component around SelectItem, and a bare text child
+// with no affordance at all, the shape most converted sites had, which no arm
+// can see. The only in-item path row now routes through PathText, whose
+// classes live in path-text.tsx and are invisible to these patterns.
 const SELECT_ITEM_CLIP_TITLE_RE = new RegExp(
   `<SelectItem\\b(?:(?!</SelectItem\\b)[\\s\\S]){0,${PAIR_GAP}}?\\bclipTitle`,
   "g",
@@ -522,7 +519,12 @@ export const CHECKS = [
     appliesTo: (file) =>
       file !== "src/lib/clip-title.ts" && notVendoredUi(file),
     scan: perFile(INLINE_CLIP_TITLE_RE),
-    allowlist: [],
+    allowlist: [
+      // PathText measures its two inner spans and titles the outer one, which
+      // never overflows itself — clipTitle can't serve that shape. It keeps
+      // the helper's remove-don't-blank contract.
+      "src/components/path-text.tsx",
+    ],
     message:
       "clip-measured tooltips route through clipTitle/clipTitleFromText (src/lib/clip-title.ts) — an inline rewrite re-opens the blank-title ancestor-suppression class; if the pairing is a false positive, add an allowlist entry with rationale",
   },
