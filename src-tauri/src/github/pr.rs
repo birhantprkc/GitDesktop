@@ -512,13 +512,45 @@ pub async fn gh_publish_owners() -> AppResult<GithubPublishOwners> {
     parse_publish_owners(&out.stdout_lossy())
 }
 
+/// Whether `url`'s host is the literal, canonical `github.com` — the ONE host
+/// GitDesktop can trust as a real web address without a network round-trip. An
+/// SSH-config alias (`Host github.com-work` in `~/.ssh/config`, the standard
+/// multi-account pattern) or a `.gitconfig` `insteadOf` rewrite (`gh:owner/repo`)
+/// both leave a DIFFERENT string in `git remote get-url` — one that resolves only
+/// inside the user's own SSH client, never in a browser — so both correctly fail
+/// this and fall back to `gh repo view`'s canonical resolution. GitHub Enterprise
+/// hosts fail it too: unlike the literal `github.com` spelling, there is no way to
+/// confirm an arbitrary domain is really a GHE instance without asking `gh`. Pure.
+fn is_canonical_github_remote(url: &str) -> bool {
+    crate::forge::remote_host(url).as_deref() == Some("github.com")
+}
+
 /// The repository's web URL (works for github.com and GitHub Enterprise).
 /// Append paths like `/issues/new` for specific pages.
 ///
 /// `lens` picks WHICH remote's repo answers: `None`/`Some("origin")` is the fork
 /// itself, `Some("upstream")` the parent. A body rendered under the upstream lens
 /// resolves its relative links against the parent, where those paths actually live.
+///
+/// The origin lens resolves purely from the `origin` remote — no `gh` call, so it
+/// works signed out (mirrors Bitbucket's `repo_url`, always a local parse, and
+/// GitLab's no-lens arm, moved the same day) — but ONLY for the literal `github.com`
+/// host ([`is_canonical_github_remote`]); anything else (Enterprise, an SSH alias,
+/// an `insteadOf` rewrite) keeps the `gh repo view` round-trip, same as the
+/// upstream lens, since resolving a fork's parent is likewise a real API question
+/// this app doesn't answer from local remote config alone.
 pub async fn gh_repo_url(repo_path: String, lens: Option<String>) -> AppResult<String> {
+    if matches!(lens.as_deref(), None | Some("origin")) {
+        let url =
+            crate::git::remote::git_remote_url(repo_path.clone(), "origin".to_string()).await?;
+        if is_canonical_github_remote(&url) {
+            return crate::forge::web_repo_url(&url).ok_or_else(|| {
+                AppError::Gh(
+                    "could not determine the repository's web URL from the origin remote".into(),
+                )
+            });
+        }
+    }
     // Pin the slug positionally (`gh repo view <slug>` — the `repo` family has no
     // `-R` flag): a bare `gh repo view` on a fork with an `upstream` remote
     // auto-resolves to the PARENT, so the lens would never be what decides.
@@ -4225,9 +4257,9 @@ pub async fn gh_pr_reactions(
         &[
             "api",
             "graphql",
-            "-F",
+            "-f",
             &format!("owner={owner}"),
-            "-F",
+            "-f",
             &format!("name={name}"),
             "-F",
             &format!("number={number}"),
@@ -4469,9 +4501,9 @@ pub async fn pr_timeline(
         &[
             "api",
             "graphql",
-            "-F",
+            "-f",
             &format!("owner={owner}"),
-            "-F",
+            "-f",
             &format!("name={name}"),
             "-F",
             &format!("number={number}"),
@@ -6141,7 +6173,7 @@ mod tests {
         apply_stack_join, classify_gh_merge_refusal, classify_merge_async,
         external_items_from_thread_nodes,
         flatten_slurped_pages, fork_head_identity, gh_api_error_message,
-        gh_pr_discard_pending_review, host_from_url,
+        gh_pr_discard_pending_review, gh_repo_url, host_from_url, is_canonical_github_remote,
         is_diff_too_large, is_object_id, map_timeline_node, parse_actions_run_job,
         parse_auth_accounts, parse_pr_url_repo, parse_publish_owners, pr_edit_args,
         pr_head_ref_from_value, pr_head_ref_query, pr_poll_query,
@@ -7166,6 +7198,92 @@ mod tests {
         )
         .await;
         assert!(!oid_outside_origin_graph(&repo_s, &local_oid).await);
+    }
+
+    /// The no-lens arm resolves purely from `origin` — real repo, no `gh` spawn —
+    /// for https and scp-style ssh. The upstream lens is untouched: with no
+    /// `upstream` remote configured it still fails, proving the split didn't
+    /// accidentally widen origin's derivation onto it.
+    ///
+    /// A FRESH temp repo per remote form — `git_remote_url`'s TTL cache is keyed by
+    /// `(repo_path, name)`, and this test's raw `git remote add` bypasses the
+    /// app-side commands that invalidate it, so reusing one path across iterations
+    /// would serve the first remote's cached URL to every later assertion.
+    #[tokio::test]
+    async fn repo_url_no_lens_arm_resolves_from_origin_without_gh() {
+        async fn run(repo: &str, args: &[&str]) {
+            let _ = run_git(Some(repo), args, DEFAULT_TIMEOUT).await;
+        }
+
+        async fn repo_with_origin(tag: &str, remote: &str) -> (tempfile::TempDir, String) {
+            let dir = tempfile::Builder::new()
+                .prefix(&format!("gd-pr-repo-url-{tag}-"))
+                .tempdir()
+                .expect("create temp dir");
+            let repo = dir.path().join("repo");
+            std::fs::create_dir_all(&repo).unwrap();
+            let repo_s = repo.to_string_lossy().into_owned();
+            run(&repo_s, &["init", "-q"]).await;
+            run(&repo_s, &["remote", "add", "origin", remote]).await;
+            (dir, repo_s)
+        }
+
+        // GitHub Enterprise is deliberately NOT a local-success case here — see
+        // `is_canonical_github_remote_admits_only_the_literal_host` below, which
+        // pins that it takes the OTHER branch without needing a live `gh` call.
+        for (tag, remote, want) in [
+            ("https", "https://github.com/theBGuy/biome.git", "https://github.com/theBGuy/biome"),
+            ("scp", "git@github.com:theBGuy/biome.git", "https://github.com/theBGuy/biome"),
+        ] {
+            let (_dir, repo_s) = repo_with_origin(tag, remote).await;
+            assert_eq!(gh_repo_url(repo_s.clone(), None).await.unwrap(), want);
+            assert_eq!(
+                gh_repo_url(repo_s.clone(), Some("origin".into())).await.unwrap(),
+                want
+            );
+        }
+
+        // No `upstream` remote exists — the lens arm still goes through
+        // `gh_lens_slug`, which resolves the remote via `git remote get-url` first;
+        // that fails (AppError::Git) before any `gh` spawn.
+        let (_dir, repo_s) = repo_with_origin("no-upstream", "https://github.com/theBGuy/biome.git").await;
+        let err = gh_repo_url(repo_s.clone(), Some("upstream".into()))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::Git { .. }));
+    }
+
+    /// The exact regression an app-review round caught: an SSH-config alias
+    /// (`Host github.com-work` in `~/.ssh/config`, the standard multi-account
+    /// pattern) or a `.gitconfig` `insteadOf` rewrite (`gh:owner/repo`) both
+    /// leave a non-`github.com` string in `git remote get-url` — a host that
+    /// resolves only inside the user's own SSH client or git config, never in a
+    /// browser. Deriving a browser URL locally from either would open a dead
+    /// page; only the literal canonical host is safe to resolve without asking
+    /// `gh`. No live `gh` call needed to prove this — the point is exactly that
+    /// these forms must NOT take the local-success path at all.
+    #[test]
+    fn is_canonical_github_remote_admits_only_the_literal_host() {
+        for remote in [
+            "https://github.com/theBGuy/biome.git",
+            "git@github.com:theBGuy/biome.git",
+            "ssh://git@github.com/theBGuy/biome.git",
+        ] {
+            assert!(is_canonical_github_remote(remote), "{remote} should be canonical");
+        }
+        for remote in [
+            // GitHub Enterprise — cannot be confirmed as GHE without asking `gh`.
+            "https://github.example.com/team/svc.git",
+            "https://github.example.com:8443/team/svc.git",
+            // SSH-config alias (`Host github.com-work`), the multi-account pattern.
+            "git@github.com-work:theBGuy/biome.git",
+            "ssh://git@github.com-work/theBGuy/biome.git",
+            // `.gitconfig` `insteadOf` rewrite (`url."git@github.com:".insteadOf =
+            // "gh:"`) — `git remote get-url` returns the UNREWRITTEN value.
+            "gh:theBGuy/biome",
+        ] {
+            assert!(!is_canonical_github_remote(remote), "{remote} should NOT be canonical");
+        }
     }
 
     /// The detail view's mergeability rides the SAME `gh pr view` call, so the

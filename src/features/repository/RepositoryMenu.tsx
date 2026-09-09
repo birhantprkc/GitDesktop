@@ -202,15 +202,24 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
       : undefined;
   // Star, fork, and create-issue deliberately stay on `canGh` — they need the
   // authenticated probe, and offering them before auth is known would be worse.
-  // The stand-in never outlives a SETTLED probe on GitHub/GitLab: forgeRepoUrl
-  // shells `gh repo view` / `glab api` there, so "not ready" means the click
-  // would fail. `!isPaused` keeps an offline session (the query parks, pending
-  // forever) from counting as in-flight. Bitbucket's resolver is a local remote
-  // parse, so its item works regardless of the probe's verdict.
-  const canViewOnHost =
-    canGh ||
-    persistedProvider === "bitbucket" ||
-    (persistedProvider !== undefined && gh.isPending && !gh.isPaused);
+  // View-on-host needs neither for GitLab, Bitbucket, or a `github.com` origin:
+  // `forgeRepoUrl` shells no CLI for those. GitHub Enterprise and a non-canonical
+  // GitHub host (an SSH-config alias, an `insteadOf` rewrite) still round-trip
+  // through `gh repo view` — but neither ever persists a provider
+  // (`provider_tag_for_host` returns `None` for them) and their live probe needs
+  // auth, so the item stays hidden rather than offering a click that would fail.
+  // `Boolean` rather than an undefined check because `provider` is `T | null`,
+  // and a repo with no hosted remote at all settles to `null` too (never widen
+  // this to "any settled probe"). GitLab/Bitbucket's `provider` resolves from the
+  // origin remote regardless of auth; GitHub's live probe (`gh.data.provider`)
+  // still needs an authenticated `gh repo view` round-trip, but `persistedProvider`
+  // covers it anyway — `useRepoVisibilityProbe` persists `RecentRepo.provider`
+  // from a PURE LOCAL remote-host parse (`git_repo_owners`/`provider_tag_for_host`,
+  // no CLI) on every repo open, GitHub included, so a signed-out `github.com`
+  // repo shows the item too once it's been opened at least once. Only a
+  // never-before-opened signed-out repo (nothing persisted yet) still waits on
+  // that ambient probe to land.
+  const canViewOnHost = Boolean(provider) || persistedProvider !== undefined;
   const viewLabel = providerLabel(provider ?? persistedProvider);
   const canStar = canGh && forgeSupports(gh.data, "stars");
   const canCreateHostIssue = canGh && forgeSupports(gh.data, "issues");
