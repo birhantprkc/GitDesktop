@@ -1168,6 +1168,7 @@ export function DiffSurface({
   repoPath,
   imageRevs,
   contentRevs,
+  previewRev,
   lineAnchors,
   lineWidget,
 }: {
@@ -1176,6 +1177,8 @@ export function DiffSurface({
   repoPath?: string;
   imageRevs?: ImageRevs;
   contentRevs?: DiffContentRevs;
+  /** See {@link DiffContent}'s prop of the same name — preview only. */
+  previewRev?: string;
   lineAnchors?: DiffLineAnchor[];
   lineWidget?: LineWidget;
 }) {
@@ -1188,6 +1191,8 @@ export function DiffSurface({
       repoPath={repoPath}
       imageRevs={imageRevs}
       contentRevs={contentRevs}
+      previewRev={previewRev}
+      dataIsPlaceholder={diff.isPlaceholderData}
       lineAnchors={lineAnchors}
       lineWidget={lineWidget}
     />
@@ -1206,6 +1211,8 @@ export function DiffContent({
   repoPath,
   imageRevs,
   contentRevs,
+  previewRev,
+  dataIsPlaceholder,
   lineAnchors,
   lineWidget,
 }: {
@@ -1218,6 +1225,16 @@ export function DiffContent({
   imageRevs?: ImageRevs;
   /** Revs to read full file text from for highlight context (text diffs). */
   contentRevs?: DiffContentRevs;
+  /** Rev to read the NEW side from for markdown preview when the diff is a
+   *  server-provided patch with no trustworthy local rev pair (PR surfaces).
+   *  Feeds ONLY the preview toggle/pane — never content-mode highlighting
+   *  (silently-capped forge patches would mis-map tokens) and never image revs. */
+  previewRev?: string;
+  /** True while `data` is another query key's retained result (placeholder). Content
+   *  mode token-maps whole-file reads at the CURRENT revs onto `data`'s hunks, so a
+   *  placeholder pairing would highlight the wrong lines — the preview pane and image
+   *  arms read whole files by rev and stay correct for the new selection. */
+  dataIsPlaceholder?: boolean;
   /** Line-anchored annotations (e.g. PR review threads). Absent = no anchors. */
   lineAnchors?: DiffLineAnchor[];
   /** Inline composer opened from a diff line (PR review). Absent = read-only. */
@@ -1262,8 +1279,14 @@ export function DiffContent({
     data.filePath === filePath &&
     !data.isBinary &&
     !emptyDiff;
+  // Preview's rev source: the diff's own pair where there is one, else the
+  // new-side-only `previewRev`. Deliberately not merged into `contentRevs` — a
+  // previewRev host has no old side and must not light up content mode.
+  const previewRevs: DiffContentRevs | undefined =
+    contentRevs ??
+    (previewRev === undefined ? undefined : { newRev: previewRev });
   const canPreview =
-    showsToolbar && canPreviewMarkdown(filePath, repoPath, contentRevs);
+    showsToolbar && canPreviewMarkdown(filePath, repoPath, previewRevs);
   const previewOn = canPreview && mdView === "preview";
   useFocusOnControlsSwap(previewOn, controlsRef);
   useHotkeyAction(
@@ -1375,14 +1398,14 @@ export function DiffContent({
         </span>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
-        {previewOn && repoPath && contentRevs ? (
+        {previewOn && repoPath && previewRevs ? (
           // Passed the raw revs, not the truncation-stripped pair below:
           // preview reads the file, not the diff, so it works on exactly the
           // truncated diffs content mode gives up on.
           <MarkdownDocPreview
             repoPath={repoPath}
             filePath={filePath}
-            revs={contentRevs}
+            revs={previewRevs}
           />
         ) : (
           <>
@@ -1400,9 +1423,12 @@ export function DiffContent({
               text={data.text}
               repoPath={repoPath}
               // A truncated diff was cut by the byte cap and can't line up
-              // with the full file text, so don't try whole-file highlighting
-              // there.
-              contentRevs={data.isTruncated ? undefined : contentRevs}
+              // with the full file text, and a placeholder one belongs to the
+              // previous selection while the revs already name the new — neither
+              // pairing can be whole-file highlighted.
+              contentRevs={
+                data.isTruncated || dataIsPlaceholder ? undefined : contentRevs
+              }
               lineAnchors={lineAnchors}
               lineWidget={lineWidget}
               forceUnified={narrowPane}
