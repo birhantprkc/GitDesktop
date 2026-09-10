@@ -129,15 +129,16 @@ A unified or split diff with syntax highlighting, collapsible surrounding
 context, and image diffing. Filter the changes list by path or category, and
 read a file's `+added -deleted` line counts without opening it. The
 working-tree diff is one whole-file view with hunk- and line-level staging
-and discarding (drag across the line numbers; hold Ctrl, or Cmd on macOS, to
-add to a selection, so one selection can mix added and removed lines across
-hunks), including committing or discarding only part of a brand-new
-(untracked) file. Stage or unstage a drag-made selection with
-`Ctrl`/`⌘`+`Shift`+`Enter`, without reaching for the button. Stage, unstage,
-or discard single files or a multi-selection from the context menu (staging
-and unstaging a selection sit in the command palette too); discarding a
-whole untracked file goes to the recycle bin. Commit with title + body,
-co-authors suggested from history, amend, undo, reset, and revert.
+and discarding (drag across the line numbers, spanning hunks freely — in
+the unified view a drag picks up added and removed lines together; hold
+Ctrl, or Cmd on macOS, to add to a selection), including committing or
+discarding only part of a brand-new (untracked) file. Stage or unstage a
+drag-made selection with `Ctrl`/`⌘`+`Shift`+`Enter`, without reaching for
+the button. Stage, unstage, or discard single files or a multi-selection
+from the context menu (staging and unstaging a selection sit in the command
+palette too); discarding a whole untracked file goes to the recycle bin.
+Commit with title + body, co-authors suggested from history, amend, undo,
+reset, and revert.
 
 Markdown and MDX files add a Raw / Preview toggle to the diff, so you can
 read a doc change as rendered prose (headings, tables, and code blocks) on
