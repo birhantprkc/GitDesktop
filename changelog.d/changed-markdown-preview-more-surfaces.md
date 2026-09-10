@@ -1,1 +1,0 @@
-- The markdown Raw / Preview toggle now covers a file's history, branch compare, and pull request files whose commits are available locally (for example after checking out the PR). File History and branch compare also gain whole-file syntax highlighting, and File History gains image comparisons.

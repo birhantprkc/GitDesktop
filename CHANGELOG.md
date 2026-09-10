@@ -12,6 +12,22 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-09-10
+
+### Changed
+
+- The markdown Raw / Preview toggle now covers a file's history, branch compare, and pull request files whose commits are available locally (for example after checking out the PR). File History and branch compare also gain whole-file syntax highlighting, and File History gains image comparisons.
+- In the unified diff view, dragging across the line numbers now selects every
+  changed line the drag crosses — added and removed lines land in one
+  selection, ready to stage, unstage, or discard together.
+
+### Fixed
+
+- Settings → About opens reliably, reporting your system details and the
+  status of every command-line tool GitDesktop uses.
+- Branch compare's image diffs now show the old side as of the branches' fork point, matching what the text diff compares against.
+- Whole-file syntax highlighting now waits for the selected commit's or stash's diff to load instead of briefly pairing with the previous selection's.
+
 ## [0.12.1] - 2026-09-09
 
 ### Changed
@@ -3887,7 +3903,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.12.2...HEAD
+[0.12.2]: https://github.com/theBGuy/GitDesktop/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/theBGuy/GitDesktop/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/theBGuy/GitDesktop/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/theBGuy/GitDesktop/compare/v0.11.0...v0.11.1
