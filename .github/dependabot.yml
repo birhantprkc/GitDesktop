@@ -14,8 +14,9 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
-    # Hold off on freshly-published releases (supply-chain safety),
-    # mirroring pnpm's minimumReleaseAge in pnpm-workspace.yaml.
+    # Hold off on freshly-published releases (supply-chain safety). pnpm's
+    # minimumReleaseAge in pnpm-workspace.yaml is the same idea for direct
+    # installs, on its own never-longer delay, not kept in step with these.
     cooldown:
       default-days: 7
       semver-major-days: 30
@@ -25,6 +26,20 @@ updates:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
     groups:
+      # Tauri's npm and crate halves must reach master in ONE commit: a group
+      # cannot span ecosystems, so combine this PR with its cargo twin. Majors
+      # are grouped too, unlike the ordinary deps below, because that bump
+      # moves both halves; a minor or major split reddens the parity gate, a
+      # patch-only one passes by design. A package with no counterpart
+      # (@tauri-apps/cli on this side, tauri-build on the cargo side) opens
+      # solo. First matching group wins.
+      tauri:
+        patterns:
+          - "@tauri-apps/*"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
       # One PR for routine minor/patch bumps; majors stay separate.
       minor-and-patch:
         update-types:
@@ -51,6 +66,18 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     groups:
+      # The crate half of the npm `tauri` group above — separate only because
+      # groups cannot span ecosystems; combine the two unless this PR carries
+      # only crates with no npm counterpart (tauri-build).
+      tauri:
+        patterns:
+          - "tauri"
+          - "tauri-build"
+          - "tauri-plugin-*"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
       minor-and-patch:
         update-types:
           - "minor"
