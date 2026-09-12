@@ -355,6 +355,30 @@ build-order lottery (tailwind-merge 3.6.0; in-repo: `data-open:animate-none!`).
   a mount never steals focus; its sibling `useHiddenTriggerFocus` owns the
   container-query-hidden-trigger close arm. Never a hand-rolled focus effect.
 
+## Seam idioms (the spec template's "Idioms at this seam" field reads this list)
+
+Wiring a NEW call site onto one of these surfaces means the governing idiom
+applies — cite it in the spec or record "none applies"; the canonical site is
+one grep away on the named symbol. Grows via Conventions-sync.
+
+- **Repo-identity keying** — per-repo state keys on the repo IDENTITY
+  (`useRepoIdentity` / the shared `--git-common-dir` resolver), never a raw
+  checkout path; a raw-path key diverges across worktrees of one repo.
+- **View lens** — a PR/issue number or blob is valid only in the lens that
+  produced it (origin vs upstream vs local match); navigation and dock entry
+  points thread the lens (`beforeSelect`), never pass a bare number across.
+- **Force/retry threading** — a re-run or retry carries its force/trigger
+  marker end-to-end; downstream code distinguishing "original vs re-run" reads
+  the marker, never infers from timing.
+- **asText rendering** — user-and-forge-supplied strings render through the
+  file's asText discipline, never raw interpolation.
+- **networkMode / offline parking** — react-query calls on possibly-offline
+  surfaces set the documented `networkMode`; the default PARKS offline and the
+  query never resolves.
+- **Invalidation keys** — cache invalidation goes through the shared key
+  builders in `queries.ts`; a hand-built key or raw-path key silently fails to
+  co-invalidate siblings.
+
 ## Rust / Tauri conventions
 
 - **Large ints over IPC:** snowflake/`u64` ids lose precision as JS numbers —
@@ -491,6 +515,12 @@ sweep stale "coming soon" mentions when a feature ships.
   `scripts/check-rule-mirrors.mjs` holds the gated list for the git whitelist
   and fails when a carrier drops the rule's core (the codex spec preamble
   restates it condensed, synced by hand).
+- **No inline gate predicates in CI YAML:** a check's logic never ships as an
+  inline `node -e`/shell string in a workflow file — it is invisible to biome,
+  to `node --test`, and to every static review lane (four independent defects
+  once shipped in one such predicate). Extract to `scripts/check-*.mjs` with
+  hit/miss fixtures in `scripts/checks.test.mjs`; the YAML step only invokes
+  the script.
 
 ## Definition of done
 
