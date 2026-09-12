@@ -1005,6 +1005,12 @@ review via its subscription login. The full list is under
   commits to a reviewed PR) that runs AI review or security audit
   automatically, with per-action branch conditions, Save/Discard drafts,
   global defaults, and per-repo overrides (paused while **Hide AI** is on).
+- **Automation history**: every decision a repository's automations made,
+  in one read-only log — what ran, what was skipped, and the reason for
+  each, with the repo's effective configuration at the top. Open it from
+  the activity bell or the repo ⋮ menu. **Run automations on this pull
+  request** (command palette) runs the configured reviews on demand,
+  confirming the modes and the posted comment before spending a model call.
 - **Integrations**: open in any editor or terminal (auto-detected, point at
   any executable, or set a full custom command with a `{path}` placeholder),
   and tunable OS notifications for PR activity, checks, and CI runs.
