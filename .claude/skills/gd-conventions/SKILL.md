@@ -378,6 +378,18 @@ one grep away on the named symbol. Grows via Conventions-sync.
 - **Invalidation keys** — cache invalidation goes through the shared key
   builders in `queries.ts`; a hand-built key or raw-path key silently fails to
   co-invalidate siblings.
+- **Plugin-store open/reload** — an app-data store opens via
+  `memoizedStoreLoader` and re-reads via `reloadToleratingEmptyStore`
+  (`src/lib/plugin-store.ts`), never a hand-rolled `??= load(storeName(…))` or a
+  bare `store.reload()`: the former memoizes a REJECTED load (store dead until
+  restart), the latter swallows an unreadable file and saves the cache over it.
+- **Hydrate gating** — a `hydrate` that swallows its read must NEVER set the
+  ready flag, and a snapshot write gates on a RESOLVED `hydrate()`, not on the
+  flag: `memoizedStoreLoader` retries after a transient failure, so a store
+  marked ready on an empty read will write that empty snapshot over data it
+  never read (re-attempting on the write path is what makes it self-heal).
+  The flag alone suffices only where the state provably cannot change before
+  the read lands — `agentNumber`, whose `ensure` won't mint while it's false.
 
 ## Rust / Tauri conventions
 
