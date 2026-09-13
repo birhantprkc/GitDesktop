@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import {
+  type AutomationKindFilter,
   NOTIFICATION_SOURCES,
   type NotificationSettings,
   type NotificationSource,
@@ -73,27 +74,45 @@ export const OUTCOME_FILTER_LABELS: Record<OutcomeFilter, string> = {
   successes: "Successes only",
 };
 
-/** Visible label on every outcome sub-row. */
-export const OUTCOME_ROW_LABEL = "Notify on";
+/** Deliberately NOT the closed-set rule above: "Everything" IS the identity filter
+ *  here, so a kind this app doesn't emit yet joins it by design rather than being
+ *  silently excluded. Only "Failures only" names a closed set. */
+export const AUTOMATION_KIND_FILTER_LABELS: Record<
+  AutomationKindFilter,
+  string
+> = {
+  all: "Everything",
+  failures: "Failures only",
+};
 
-/** Accessible name for an outcome picker: the two matrices hold one per CI source,
- *  so the visible word alone names neither. Visible text first (WCAG 2.5.3). */
-export function outcomeAriaLabel(source: OutcomeSource): string {
-  return `${OUTCOME_ROW_LABEL} — ${SOURCE_LABELS[source]}`;
+/** A source carrying a Notify-on sub-row — the CI sources on the outcome axis, plus
+ *  automations on its kind axis. Named once here, since the label, the held reason,
+ *  and both dialog predicates all key off the same set. */
+export type SubrowSource = OutcomeSource | "automations";
+
+/** Visible label on every Notify-on sub-row, on both the outcome and kind axes. */
+export const SUBROW_LABEL = "Notify on";
+
+/** Accessible name for a Notify-on picker: each matrix holds one per CI source plus
+ *  the automations row, so the visible word alone names none of them. Visible text
+ *  first (WCAG 2.5.3). */
+export function subrowAriaLabel(source: SubrowSource): string {
+  return `${SUBROW_LABEL} — ${SOURCE_LABELS[source]}`;
 }
 
 /** Why the CI-checks sub-rows are held while that source delivers nowhere. Named
  *  rather than inlined below because the Watch and Notify-on pickers are held by
  *  exactly the same condition and print one line between them; every reader reaches
- *  it through {@link OUTCOME_HELD_REASONS}, so it stays module-private. */
+ *  it through {@link SUBROW_HELD_REASONS}, so it stays module-private. */
 const CHECKS_OFF_REASON =
   "Turn on a CI checks channel to choose which pull requests to watch and which results notify";
 
-/** Why an outcome picker is held, per source — the CI-checks sentence also covers
- *  its Watch neighbour, so the two rows print one line between them. */
-export const OUTCOME_HELD_REASONS: Record<OutcomeSource, string> = {
+/** Why a qualifying sub-row is held, per source — the CI-checks sentence also covers
+ *  its Watch neighbour, so those two rows print one line between them. */
+export const SUBROW_HELD_REASONS: Record<SubrowSource, string> = {
   prChecks: CHECKS_OFF_REASON,
   actionRuns: "Turn on a workflow-runs channel to choose which results notify",
+  automations: "Turn on an automations channel to choose which results notify",
 };
 
 /** The rows the matrix renders, in manifest order. Hidden AI rows keep whatever
@@ -131,13 +150,14 @@ export function notificationsSignature(value: NotificationSettings): string {
 }
 
 /** How many individual settings an override pins — each channel field, the scope,
- *  and each outcome filter. The Reset gate and the settings footer's status line
- *  both count it. */
+ *  each outcome filter, and the automations kind filter. The Reset gate and the
+ *  settings footer's status line both count it. */
 export function overrideCount(
   override: RepoNotificationOverride | undefined,
 ): number {
   if (!override) return 0;
   let count = override.prChecksScope === undefined ? 0 : 1;
+  if (override.automationKinds !== undefined) count += 1;
   for (const source of OUTCOME_SOURCES) {
     if (override.outcomes?.[source] !== undefined) count += 1;
   }
