@@ -2463,6 +2463,74 @@ export type ProjectFieldValueUpdate =
   | { kind: "multiSelect"; fieldId: string; optionIds: string[] }
   | { kind: "iteration"; fieldId: string; iterationId: string };
 
+/** One assignee on a board card — the login plus whatever avatar the forge gave
+ *  us. Deliberately narrower than {@link ForgeUserRef}: a board page carries
+ *  hundreds of these, and the card renders nothing else about a person. */
+export interface AssigneeRef {
+  login: string;
+  avatarUrl: string;
+}
+
+/** What a board item IS. `draft` is a project-only note with no issue behind it,
+ *  and `redacted` is an item whose content the viewer may not see — a private
+ *  repo on a public board — which arrives with no fields at all rather than
+ *  being dropped, so the board's counts stay honest. */
+export type BoardItemContent =
+  | {
+      kind: "issue";
+      id: string;
+      number: number;
+      title: string;
+      state: string;
+      /** GitHub's issue state reason, or null when it carries none. COMPLETED /
+       *  NOT_PLANNED / DUPLICATE ride a CLOSED issue, but REOPENED rides an OPEN
+       *  one — so this is not a closed-only field, and a reader must not treat a
+       *  present reason as proof the issue is closed. */
+      stateReason: string | null;
+      repoNameWithOwner: string;
+      assignees: AssigneeRef[];
+    }
+  | {
+      kind: "pullRequest";
+      id: string;
+      number: number;
+      title: string;
+      state: string;
+      isDraft: boolean;
+      repoNameWithOwner: string;
+      assignees: AssigneeRef[];
+    }
+  | {
+      kind: "draft";
+      id: string;
+      title: string;
+      body: string;
+      assignees: AssigneeRef[];
+    }
+  | { kind: "redacted" };
+
+/** One card on a board: the membership's own id, whether the board has archived
+ *  it, what it holds, and its field values — the same per-item shape
+ *  {@link ItemProjectFieldValues} carries, which is what groups it into a
+ *  column. */
+export interface BoardItem {
+  itemId: string;
+  isArchived: boolean;
+  content: BoardItemContent;
+  fieldValues: ProjectFieldValue[];
+}
+
+/** One page of a board's items, in the board's own POSITION order. `totalCount`
+ *  is the board's full item count INCLUDING archived ones, so it can exceed what
+ *  the board draws; `truncated` with `endCursor` is how the next page is asked
+ *  for. */
+export interface BoardItems {
+  items: BoardItem[];
+  totalCount: number;
+  truncated: boolean;
+  endCursor: string | null;
+}
+
 export interface Reaction {
   /** GitHub ReactionContent enum value (THUMBS_UP, HEART, ROCKET, …). */
   content: string;
