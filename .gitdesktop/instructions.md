@@ -33,6 +33,7 @@ All commit messages and PR titles must follow **Conventional Commits** format.
 - **Multiple scopes** for cross-cutting changes: `feat(github,settings): add auth flow`
 - **Type guides later tooling** — `feat` and `fix` trigger changelog entries automatically
 - Use **lowercase** and **no period** in the description
+- **Branch names take the same types** as a `<type>/` prefix: `feat/ai-model-picker`, `fix/diff-binary-files`, `chore/deps-bump` — never `feature/`
 
 # Documentation: four surfaces, one change
 
