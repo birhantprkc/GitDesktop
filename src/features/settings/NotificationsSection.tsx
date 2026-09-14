@@ -16,7 +16,7 @@ import {
 import { clipTitleFromText } from "@/lib/clip-title";
 import { withForm } from "@/lib/form";
 import { useRepoIdentity } from "@/lib/git/queries";
-import { repoIdentity } from "@/lib/git/repo-identity";
+import { repoIdentityStrict } from "@/lib/git/repo-identity";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import {
   CHANNELS,
@@ -297,9 +297,9 @@ function RepoOverridesBlock({ reason }: { reason: string | null }) {
   const settings = useSettings();
   const overrides = useNotificationOverrides();
   const clear = useClearNotificationOverride();
-  // An empty path reads as "no repo open" all the way down: the identity query
+  // No repo open reads as "nothing to claim" all the way down: the identity query
   // is disabled and the override lookup misses, so no branch needs a guard.
-  const identity = useRepoIdentity(repoPath ?? "").data;
+  const { data: identity, isError: identityFailed } = useRepoIdentity(repoPath);
   const current = useRepoNotificationOverride(repoPath ?? "");
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -313,17 +313,23 @@ function RepoOverridesBlock({ reason }: { reason: string | null }) {
   const recents = settings.data?.recentRepos ?? [];
   const recentPaths = recents.map((r) => r.path);
   // Nothing is claimed about a repo until BOTH the stored overrides and the open
-  // repo's identity are in hand: an identity-keyed entry is invisible while that
-  // resolves, so an early read would name the open repo as "another repository"
-  // and call it unmodified in the same frame.
+  // repo's identity have SETTLED: an identity-keyed entry is invisible while the
+  // lookup resolves, so an early read would name the open repo as "another
+  // repository" and call it unmodified in the same frame. A lookup that failed for
+  // good settles too — the raw path is then all this repo can be addressed by, and
+  // holding out for an identity would leave the section blank until a remount.
   const resolved =
     overrides.data !== undefined &&
-    (repoPath === null || identity !== undefined);
+    (repoPath === null || identity !== undefined || identityFailed);
   // Every key the open repo could be stored under — its identity and, until the
   // next save folds it, its raw checkout path. Compared case-insensitively, in
   // step with `overrideEntry`, which matches both arms through `samePath`: an
   // exact-case test here would count a differently-cased path entry as the open
   // repo's AND list it as another repository's.
+  // With the identity unknown (a failed lookup), the raw path is the only arm, so
+  // an identity-keyed entry for the OPEN repo lists under "other repositories"
+  // (named by `recentIdentities`) until the lookup heals — the accepted cost of
+  // settling, and the same place the old swallowed fallback left it.
   const ownKeys = new Set(
     [repoPath, identity]
       .filter((k): k is string => typeof k === "string")
@@ -336,7 +342,9 @@ function RepoOverridesBlock({ reason }: { reason: string | null }) {
     : [];
 
   // Identities resolve over IPC, so the mapping is a query rather than render
-  // work; `repoIdentity` memoizes per path, so a repeat costs nothing. Keyed on
+  // work; the resolver memoizes per path, so a repeat costs nothing. STRICT
+  // because this staleTime would pin a swallowed raw path forever; a failed
+  // mapping still resolves path-keyed rows through `byPath`. Keyed on
   // the RECENT REPOS alone — what it resolves doesn't depend on which overrides
   // exist, and carrying the key set would mint a fresh query on every Clear,
   // flashing the list back to skeletons and unmounting the row focus was headed
@@ -344,7 +352,7 @@ function RepoOverridesBlock({ reason }: { reason: string | null }) {
   // at render, since structural sharing only recurses plain objects and arrays.
   const recentIdentities = useQuery({
     queryKey: ["notification-override-repo-identities", recentPaths],
-    queryFn: () => Promise.all(recentPaths.map((p) => repoIdentity(p))),
+    queryFn: () => Promise.all(recentPaths.map((p) => repoIdentityStrict(p))),
     enabled: otherKeys.length > 0,
     staleTime: Number.POSITIVE_INFINITY,
     // Local git reads: the default online mode PARKS the query while the OS
@@ -364,9 +372,7 @@ function RepoOverridesBlock({ reason }: { reason: string | null }) {
   const rows: OverrideRow[] = otherKeys
     .map((key) => {
       const lowerKey = key.toLowerCase();
-      const path = identities
-        ? (byIdentity.get(lowerKey) ?? byPath.get(lowerKey) ?? null)
-        : null;
+      const path = byIdentity.get(lowerKey) ?? byPath.get(lowerKey) ?? null;
       return {
         key,
         path,
