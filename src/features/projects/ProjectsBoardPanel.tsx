@@ -3,15 +3,24 @@ import { FadersHorizontalIcon } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent,
   type ReactNode,
   useCallback,
+  useEffect,
   useId,
+  useRef,
   useState,
 } from "react";
 import { DisabledReasonButton } from "@/components/disabled-reason-button";
 import { usePanelPortalContainer } from "@/components/panel-portal";
 import { SelectClipText } from "@/components/select-clip-text";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Radio, RadioGroup } from "@/components/ui/radio-group";
 import {
   Select,
@@ -23,10 +32,12 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   projectScopeMissing,
+  projectScopeReadOnly,
   ScopeGapBlock,
 } from "@/features/conversations/ProjectsPopover";
 import { ForgeNotReady } from "@/features/repository/ForgeNotReady";
 import { clipTitleFromText } from "@/lib/clip-title";
+import { suppressContextMenu } from "@/lib/context-menu";
 import { presentError } from "@/lib/error-summary";
 import { useActiveGhHost, useForgeGhHost } from "@/lib/git/host";
 import {
@@ -34,18 +45,27 @@ import {
   useAvailableProjects,
   useForgeStatus,
   useGhScopes,
+  useMoveBoardCard,
   useProjectFields,
   useProjectItems,
 } from "@/lib/git/queries";
-import { type BoardItem, providerLabel } from "@/lib/git/types";
+import {
+  type BoardItem,
+  type BoardItemContent,
+  providerLabel,
+} from "@/lib/git/types";
 import { useRemoteSlug, useRepoLens } from "@/lib/repo-lens/queries";
 import { type RepoTab, useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
+import { BoardCardMenuItems, type BoardMenuTarget } from "./BoardCardMenu";
 import { BoardColumn } from "./BoardColumn";
 import {
+  type BoardColumnModel,
   buildColumns,
   firstCardPosition,
   groupableFields,
+  optionIdFor,
+  UNSET_COLUMN_ID,
 } from "./board-model";
 
 /** Where an issue or pull request on this board lands, per kind: the tab that
@@ -64,10 +84,101 @@ const NO_GROUP_FIELDS_REASON =
   "This project has no single-select fields to group its board by";
 const LOADING_FIELDS_REASON = "Loading this project's fields…";
 const FIELDS_ERROR_REASON = "Couldn't load this project's fields";
+/** The next three mirror the field editor's own wording verbatim: each surface
+ *  gates on the same flag as the row it mirrors, and the two must not say it
+ *  differently (ProjectFieldsEditor.tsx). */
+const READ_ONLY_SCOPE_REASON =
+  "Your GitHub sign-in can read project fields but not change them (needs the project scope)";
+const NO_ACCESS_REASON = "You don't have write access to this project";
+const ISSUE_FIELD_REASON =
+  "Issue fields are edited on GitHub — board editing arrives later";
+/** Single-writer: two writes to one card's field settle in an order nothing
+ *  promises, and an EARLIER move failing late puts the card back in a column a
+ *  later write already moved it out of. */
+const MOVING_REASON = "Moving your last card…";
+/** Held rather than queued: a move cancels the board's reads, and query-core's
+ *  cancel REVERTS an in-flight one. */
+const LOADING_PAGE_REASON = "Finishing the board's next page…";
 /** A view-option row. Mirrors the field editor's own option rows, which are the
  *  same shape on the same kind of choice. */
 const GROUP_ROW_CLASS =
   "flex cursor-pointer items-center gap-2 px-1 py-1 text-xs hover:bg-muted/60";
+
+/** Whether a card's issue or pull request opens IN-APP rather than in the browser.
+ *  `selectIssue`/`selectPr` hand over a bare number the destination resolves under
+ *  the repo's ACTIVE lens, so only a card from the repo that lens points at can be
+ *  opened here. An unresolved slug (`null`) takes the browser branch deliberately:
+ *  that is the SAFE direction, since an in-app open on an unconfirmed match would
+ *  paint the wrong repository's detail view under this number. */
+function opensInApp(
+  content: Extract<BoardItemContent, { kind: "issue" | "pullRequest" }>,
+  repoSlug: string | null,
+): boolean {
+  return (
+    repoSlug !== null &&
+    content.repoNameWithOwner.toLowerCase() === repoSlug.toLowerCase()
+  );
+}
+
+/** The Open row's words, or null where the menu carries no Open row at all: a
+ *  DRAFT opens its notes from the card's own popover trigger, and a redacted item
+ *  has no destination. The two labels are the two branches {@link opensInApp}
+ *  picks between, so the row can't promise a tab the open won't use. */
+function openLabelFor(
+  item: BoardItem | undefined,
+  repoSlug: string | null,
+): string | null {
+  const content = item?.content;
+  if (
+    content === undefined ||
+    (content.kind !== "issue" && content.kind !== "pullRequest")
+  )
+    return null;
+  return opensInApp(content, repoSlug) ? "Open" : "Open on GitHub";
+}
+
+/** Where `itemId` sits in the freshly derived columns, or null when the board no
+ *  longer draws it — which a move's own patch can never cause, but a refetch
+ *  landing mid-chase can. */
+function findCard(
+  columns: BoardColumnModel[],
+  itemId: string,
+): { col: number; idx: number } | null {
+  for (const [col, column] of columns.entries()) {
+    const idx = column.items.findIndex((item) => item.itemId === itemId);
+    if (idx !== -1) return { col, idx };
+  }
+  return null;
+}
+
+/**
+ * Releases the board's menu latch when the menu's HOST leaves the tree — a fatal
+ * read, a project switch, anything that swaps the board's body arm out from under
+ * an open menu. Base UI's close-complete callback rides the popup's own unmount,
+ * so a root that disappears with it never fires one, and a latched flag would hold
+ * the focus chase armed (re-scanning the columns every render) until the next menu
+ * close spent its stale claim.
+ *
+ * Mounted INSIDE the menu so the release keys on the real mount rather than on a
+ * copy of the body-arm ladder, which would drift. Both setters are `useState`'s
+ * own, so the effect runs once and only its cleanup does the work.
+ */
+function MenuLatchRelease({
+  setMenuBusy,
+  setChase,
+}: {
+  setMenuBusy: (busy: boolean) => void;
+  setChase: (itemId: string | null) => void;
+}) {
+  useEffect(
+    () => () => {
+      setMenuBusy(false);
+      setChase(null);
+    },
+    [setMenuBusy, setChase],
+  );
+  return null;
+}
 
 /** The board's first paint: three column shells rather than a spinner, so the
  *  real columns replace them without the surface shifting. */
@@ -119,14 +230,15 @@ function BoardNotice({ children }: { children: ReactNode }) {
 }
 
 /**
- * The Projects tab: a read-only kanban of one GitHub Project, grouped by one of
- * the board's single-select fields.
+ * The Projects tab: a kanban of one GitHub Project, grouped by one of the board's
+ * single-select fields, with one write — a card's context menu moves it between
+ * the columns of that grouping.
  *
  * Every read gates on `active` as well as the provider — `<Activity>` defers a
  * hidden panel's effects but NOT its queries, so a board left on another tab
- * would otherwise keep paying for owner-wide project reads. Nothing here writes:
- * the switcher and the group-by are transient component state on purpose, so a
- * board the user looked at once doesn't become a stored preference.
+ * would otherwise keep paying for owner-wide project reads. The layout choices
+ * stay unwritten: the switcher and the group-by are transient component state on
+ * purpose, so a board the user looked at once doesn't become a stored preference.
  */
 export function ProjectsBoardPanel({
   repoPath,
@@ -224,18 +336,10 @@ export function ProjectsBoardPanel({
       const content = item.content;
       if (content.kind !== "issue" && content.kind !== "pullRequest") return;
       const target = FORGE_KIND[content.kind];
-      // `selectIssue`/`selectPr` hand over a bare number that the destination
-      // resolves under the repo's ACTIVE lens, so only a card from the repo that
-      // lens points at can be opened in-app. Everything else on the board —
-      // another repo, or the same repo under the other lens — leaves the app,
-      // which is the same rule the Markdown reference links follow.
-      // An unresolved slug (`null`) takes the browser branch deliberately: that
-      // is the SAFE direction, since an in-app open on an unconfirmed match
-      // would paint the wrong repository's detail view under this number.
-      if (
-        repoSlug !== null &&
-        content.repoNameWithOwner.toLowerCase() === repoSlug.toLowerCase()
-      ) {
+      // Everything the predicate refuses — another repo, or the same repo under
+      // the other lens — leaves the app, which is the same rule the Markdown
+      // reference links follow.
+      if (opensInApp(content, repoSlug)) {
         const id = String(content.number);
         if (content.kind === "issue") selectIssue({ kind: "remote", id });
         else selectPr({ kind: "remote", id });
@@ -252,7 +356,7 @@ export function ProjectsBoardPanel({
   /** The card `el` sits in, resolved from the DOM rather than from state: a bare
    *  Tab into the board moves focus without touching the cursor, and the arrows
    *  must act on where the user actually is. */
-  function cardAt(el: HTMLElement): { col: number; idx: number } | null {
+  function cardAt(el: Element): { col: number; idx: number } | null {
     const card = el.closest<HTMLElement>("[data-card-index]");
     const column = card?.closest<HTMLElement>("[data-column-index]");
     if (!card || !column) return null;
@@ -321,6 +425,156 @@ export function ProjectsBoardPanel({
     setFocusNonce((n) => n + 1);
   }
 
+  // The board's one write. ONE instance, which is what makes `isPending` a real
+  // single-flight gate — the menu's stated contract, and what keeps two writes to
+  // one card's field from settling in an order that leaves it in the wrong column.
+  const move = useMoveBoardCard();
+  const [menuTarget, setMenuTarget] = useState<BoardMenuTarget>(null);
+  // The same target, readable SYNCHRONOUSLY. Base UI decides whether to open from
+  // inside the very dispatch the keyboard route records in, so the open gate below
+  // can't wait for this render's state to commit.
+  const menuTargetRef = useRef<BoardMenuTarget>(null);
+  // True from the moment the menu opens until its close has fully SETTLED, which
+  // is why the completion callback owns the falling edge: Base UI returns focus to
+  // the trigger from the popup's unmount cleanup, and that unmount is what fires
+  // `onOpenChangeComplete(false)` — a focus claim raised any earlier is undone by
+  // the return.
+  const [menuBusy, setMenuBusy] = useState(false);
+  // The itemId the cursor is chasing through a move, and the last place it was
+  // chased to. Two landings per move at most — the optimistic patch, then a
+  // rollback if the write fails — and the stamp is what keeps a settle from
+  // re-claiming focus on a card the cursor already sits on.
+  const [chase, setChase] = useState<string | null>(null);
+  const chasedRef = useRef("");
+  const chasePos = chase === null ? null : findCard(columns, chase);
+  const chaseCol = chasePos?.col ?? null;
+  const chaseIdx = chasePos?.idx ?? null;
+  const movePending = move.isPending;
+  useEffect(() => {
+    if (chase === null || menuBusy) return;
+    const settled = !movePending;
+    if (chaseCol === null || chaseIdx === null) {
+      // The board stopped drawing the card — a regroup, a project switch, or a
+      // refetch that dropped it. Disarming on settle is what keeps a chase that
+      // can never land from re-scanning the columns on every render.
+      if (settled) setChase(null);
+      return;
+    }
+    const stamp = `${chase}@${chaseCol}:${chaseIdx}`;
+    if (chasedRef.current === stamp) {
+      if (settled) setChase(null);
+      return;
+    }
+    // A frame past the unmount that released `menuBusy`, so the claim lands after
+    // the focus return rather than under it.
+    const frame = requestAnimationFrame(() => {
+      chasedRef.current = stamp;
+      setCursor({ col: chaseCol, idx: chaseIdx });
+      setFocusNonce((n) => n + 1);
+      if (settled) setChase(null);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [chase, chaseCol, chaseIdx, menuBusy, movePending]);
+
+  // Ranked like the field editor's own holds, and for the same reasons — the two
+  // surfaces gate on the same flags, so they say it the same way. The last two arms
+  // rank at the tail because they are the only ones that clear on their own.
+  const moveHeldReason = (() => {
+    switch (true) {
+      case projectScopeReadOnly(scopes.data):
+        return READ_ONLY_SCOPE_REASON;
+      case project !== null && !project.viewerCanUpdate:
+        return NO_ACCESS_REASON;
+      case groupField !== null && groupField.isIssueField:
+        return ISSUE_FIELD_REASON;
+      case movePending:
+        return MOVING_REASON;
+      // A move's own `cancelQueries` REVERTS an in-flight fetch (query-core cancels
+      // with `revert: true` by default), so starting one now would silently undo
+      // the page the user just asked for.
+      case items.isFetchingNextPage:
+        return LOADING_PAGE_REASON;
+      default:
+        return undefined;
+    }
+  })();
+
+  /** Record what a menu opened over `el` would act on, and report whether that is
+   *  anything at all. Null — and so no menu — for board chrome and empty column
+   *  space, for a redacted card (nothing to open, nothing to move), and for a draft
+   *  on an UNGROUPED board, whose Open row and Move section are both absent. */
+  function recordMenuTarget(el: Element | null): boolean {
+    const at = el === null ? null : cardAt(el);
+    const item = at === null ? undefined : columns[at.col]?.items[at.idx];
+    // The cursor moves to whatever was pressed, a suppressed menu included, so the
+    // board's selection and the menu describe the same card (the Actions and
+    // History lists select their pressed row the same way). The nonce stays put:
+    // this sets where the arrows resume, never where focus goes.
+    if (at !== null && item !== undefined) setCursor(at);
+    const kind = item?.content.kind;
+    const next: BoardMenuTarget =
+      at === null ||
+      item === undefined ||
+      kind === "redacted" ||
+      (kind === "draft" && groupField === null)
+        ? null
+        : {
+            item,
+            // The card's VALUE, read the way the bucketing reads it. An unset field
+            // names the catch-all; a stored option the field no longer defines
+            // names a column that isn't drawn, which is what leaves the clear row
+            // live for the one card that needs it.
+            valueColumnId:
+              groupField === null
+                ? UNSET_COLUMN_ID
+                : (optionIdFor(item, groupField) ?? UNSET_COLUMN_ID),
+          };
+    menuTargetRef.current = next;
+    setMenuTarget(next);
+    return next !== null;
+  }
+
+  /** Every pointer route into the menu passes here first. Base UI opens a TOUCH
+   *  menu from its own long-press timer without ever dispatching `contextmenu`, so
+   *  pointerdown is the one gesture both routes share — recording anywhere else
+   *  leaves a long press showing the previously right-clicked card's menu. */
+  function handleCardPointerDown(e: PointerEvent) {
+    recordMenuTarget(e.target instanceof Element ? e.target : null);
+  }
+
+  /** The mouse and keyboard route. Re-records because Shift+F10 and the Menu key
+   *  reach here with no pointerdown ahead of them. */
+  function handleCardContextMenu(e: MouseEvent) {
+    // Element-wide, not HTMLElement: a card's state/draft/lock glyphs are SVG, and
+    // a right-click landing on one is a right-click on the card — narrowing here
+    // reads those hits as empty space and suppresses the menu over a real card.
+    if (!recordMenuTarget(e.target instanceof Element ? e.target : null))
+      suppressContextMenu(e);
+  }
+
+  /** Write the grouped field so `item` lands in `columns[columnIndex]`. The
+   *  catch-all column stands for the ABSENCE of a value, so it clears the field
+   *  rather than setting an option. */
+  function moveCard(item: BoardItem, columnIndex: number) {
+    const column = columns[columnIndex];
+    if (groupField === null || projectId === null || column === undefined)
+      return;
+    // Belt-and-braces with the rows' own `disabled`: the hold is derived at render,
+    // and a pick racing the render that sets it must not get through either.
+    if (moveHeldReason !== undefined) return;
+    const option = groupField.options.find((o) => o.id === column.id) ?? null;
+    setChase(item.itemId);
+    // The board this move belongs to travels WITH it: an offline move parks before
+    // the write and resumes on whatever render is current by then.
+    move.mutate({
+      repo: repoPath,
+      projectId,
+      itemId: item.itemId,
+      field: groupField,
+      option,
+    });
+  }
+
   // Ranked, because the popup can be opened before the fields read settles and
   // an UNSETTLED read is not the same claim as a settled empty one. Claiming "no
   // single-select fields" while the read is still in flight is a false
@@ -385,13 +639,20 @@ export function ProjectsBoardPanel({
   // refetch and appends a fresh page onto the stale ones — and the append's own
   // success then clears `isInvalidated`, stamping the stale cards provably fresh
   // for the rest of the staleTime window. Measured against query-core 5.102.8.
-  // Two reasons, because the two waits mean different things to the user.
+  // Each reason is its own wait, because they mean different things to the user.
   const loadMoreHeld = (() => {
     switch (true) {
       case items.isFetchingNextPage:
         return "Loading more items…";
       case items.isFetching:
         return "Refreshing the board…";
+      // The mirror of the menu's own page-fetch hold, and the same mechanism read
+      // from the other side: a move's settle cancels this query's family to force
+      // the reconciliation, and query-core's cancel REVERTS whatever is in flight —
+      // so a continuation started during the write window would be thrown away
+      // between its request and the pages it was meant to extend.
+      case movePending:
+        return "Finishing your last card move…";
       // The post-failure half of the same hazard. A REFRESH that failed leaves
       // the pre-edit pages on screen with the invalidation still owed, and both
       // fetching guards above have released. Appending a continuation onto those
@@ -541,27 +802,75 @@ export function ProjectsBoardPanel({
         );
       default:
         return (
-          // One horizontal scroll region for the whole board; each column owns
-          // its own vertical one.
-          <div
-            className="flex min-h-0 flex-1 gap-2 overflow-x-auto"
-            onKeyDown={onBoardKeyDown}
+          // ONE menu for the whole board rather than a portal per card: a
+          // virtualized row that scrolls out would otherwise leave a popup
+          // anchored to a detached node. The capture handler runs before Base
+          // UI's own trigger handler, so the target is recorded — or the menu
+          // suppressed — before it opens.
+          <ContextMenu
+            onOpenChange={(open, details) => {
+              // The one gate BOTH routes pass. A long press opens from the
+              // trigger's own timer and dispatches no `contextmenu`, so the
+              // capture-phase suppression can't reach it; `cancel()` refuses the
+              // change before Base UI mounts the popup, which is what keeps an
+              // empty one off the screen rather than flashing it closed. The mouse
+              // route never gets here — its suppression already stopped the event.
+              if (open && menuTargetRef.current === null) {
+                details.cancel();
+                return;
+              }
+              if (open) setMenuBusy(true);
+            }}
+            onOpenChangeComplete={setMenuBusy}
           >
-            {columns.map((column, i) => (
-              <BoardColumn
-                key={column.id}
-                column={column}
-                columnIndex={i}
-                activeIndex={liveCursor?.col === i ? liveCursor.idx : null}
-                tabStopIndex={tabStop?.col === i ? tabStop.idx : null}
-                focusNonce={focusNonce}
-                repoSlug={repoSlug}
-                ghHost={ghHost}
-                onCardFocus={onCardFocus}
-                onOpen={openItem}
+            <MenuLatchRelease setMenuBusy={setMenuBusy} setChase={setChase} />
+            <ContextMenuTrigger
+              render={
+                // One horizontal scroll region for the whole board; each column
+                // owns its own vertical one.
+                <div
+                  className="flex min-h-0 flex-1 gap-2 overflow-x-auto"
+                  onKeyDown={onBoardKeyDown}
+                  onPointerDownCapture={handleCardPointerDown}
+                  onContextMenuCapture={handleCardContextMenu}
+                />
+              }
+            >
+              {columns.map((column, i) => (
+                <BoardColumn
+                  key={column.id}
+                  column={column}
+                  columnIndex={i}
+                  activeIndex={liveCursor?.col === i ? liveCursor.idx : null}
+                  tabStopIndex={tabStop?.col === i ? tabStop.idx : null}
+                  focusNonce={focusNonce}
+                  repoSlug={repoSlug}
+                  ghHost={ghHost}
+                  onCardFocus={onCardFocus}
+                  onOpen={openItem}
+                />
+              ))}
+            </ContextMenuTrigger>
+            <ContextMenuContent className="min-w-56">
+              <BoardCardMenuItems
+                target={menuTarget}
+                // An ungrouped board has one column standing for the whole
+                // board, which is no move target at all.
+                columns={groupField === null ? [] : columns}
+                openLabel={openLabelFor(menuTarget?.item, repoSlug)}
+                heldReason={moveHeldReason}
+                actions={{
+                  open: () => {
+                    if (menuTarget !== null) openItem(menuTarget.item);
+                  },
+                  move: (columnIndex) => {
+                    if (menuTarget !== null)
+                      moveCard(menuTarget.item, columnIndex);
+                  },
+                }}
               />
-            ))}
-          </div>
+            </ContextMenuContent>
+          </ContextMenu>
         );
     }
   })();
@@ -745,7 +1054,7 @@ export function ProjectsBoardPanel({
                   // Belt-and-braces with the `disabled` above: the held state is
                   // derived at render, and a click racing the render that sets it
                   // must not get through either.
-                  if (items.isFetching) return;
+                  if (items.isFetching || movePending) return;
                   void items.fetchNextPage();
                 }}
               >

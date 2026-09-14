@@ -1,4 +1,5 @@
 import {
+  type InfiniteData,
   type QueryClient,
   type QueryKey,
   queryOptions,
@@ -29,6 +30,7 @@ import type {
   BbEnvironment,
   BitbucketHookInput,
   BitbucketRepoSettingsInput,
+  BoardItems,
   CiStatus,
   CommitCommentOut,
   DiffStatEntry,
@@ -54,6 +56,8 @@ import type {
   PrDetails,
   PrInfo,
   PrMergeabilityState,
+  ProjectFieldDef,
+  ProjectFieldOptionDef,
   ProjectFieldValue,
   ProjectFieldValueUpdate,
   ProjectItemRef,
@@ -2493,12 +2497,17 @@ export function useItemProjects(
   });
 }
 
+/** Every item's field values in one repo — the prefix {@link itemFieldValuesKey}
+ *  extends, and the only handle a writer without an item's lens/kind/number has. */
+const itemFieldValuesFamilyKey = (repo: string) =>
+  ["repo", repo, "item-field-values"] as const;
+
 const itemFieldValuesKey = (
   repo: string,
   lens: RemoteLens,
   kind: "issue" | "pr",
   number: number,
-) => ["repo", repo, "item-field-values", lens, kind, number] as const;
+) => [...itemFieldValuesFamilyKey(repo), lens, kind, number] as const;
 
 /** One issue/PR's project field values, per board. Same axes, staleTime and
  *  `retry: false` as {@link useItemProjects} — it reads the same boards through the
@@ -2667,6 +2676,165 @@ export function useProjectItems(
     enabled,
     staleTime: 60_000,
     retry: false,
+  });
+}
+
+/** The board field a move writes: the single-select arm alone, since only that
+ *  kind makes columns. */
+type BoardGroupField = Extract<ProjectFieldDef, { kind: "singleSelect" }>;
+
+/** The moved item's field values with `field` set to `option`, or dropped when
+ *  `option` is null — the clear. Replaced IN PLACE where an entry already exists
+ *  so the rail's line order survives a move. */
+function withGroupValue(
+  values: ProjectFieldValue[],
+  field: BoardGroupField,
+  option: ProjectFieldOptionDef | null,
+): ProjectFieldValue[] {
+  const next: ProjectFieldValue | null =
+    option === null
+      ? null
+      : {
+          kind: "singleSelect",
+          fieldId: field.id,
+          fieldName: field.name,
+          optionId: option.id,
+          name: option.name,
+          color: option.color,
+          isIssueField: field.isIssueField,
+        };
+  const held = values.some(
+    (value) => value.kind === "singleSelect" && value.fieldId === field.id,
+  );
+  if (!held) return next === null ? values : [...values, next];
+  return values.flatMap((value) => {
+    if (value.kind !== "singleSelect" || value.fieldId !== field.id)
+      return [value];
+    return next === null ? [] : [next];
+  });
+}
+
+/** One item's `fieldValues` replaced across every cached page, leaving every OTHER
+ *  item and every page the caller never read exactly as they are. Both directions
+ *  of the write go through here: a whole-tree restore would drop a `Load more` page
+ *  that landed mid-flight, since the rollback would carry the tree as it was before
+ *  that page existed. */
+function patchBoardItem(
+  data: InfiniteData<BoardItems, string | null> | undefined,
+  itemId: string,
+  values: ProjectFieldValue[],
+): InfiniteData<BoardItems, string | null> | undefined {
+  if (data === undefined) return undefined;
+  return {
+    ...data,
+    pages: data.pages.map((page) => ({
+      ...page,
+      items: page.items.map((item) =>
+        item.itemId === itemId ? { ...item, fieldValues: values } : item,
+      ),
+    })),
+  };
+}
+
+/**
+ * The board's own move: one item's grouped single-select field, written through the
+ * same command the field editor uses, with an optimistic patch of the board's item
+ * pages. `buildColumns` derives the columns from those field values, so the patch
+ * re-buckets the card at its global-position slot without the board re-reading.
+ *
+ * Single-writer by contract: the panel holds ONE instance and disables every move
+ * row while it is pending. Not for the snapshot's sake — the rollback below is one
+ * item wide — but because two writes to the same card's field settle in an order
+ * neither the board nor GitHub promises, and a late rollback would put a card back
+ * in a column a later write already moved it out of.
+ *
+ * The write TARGET rides the variables, never this hook's scope. A pending mutation
+ * runs on the latest render's options — query-core re-applies them on every
+ * re-render, and an offline move PAUSES before `mutationFn` and resumes through
+ * whatever closure is current — so a repo or board switch mid-flight would
+ * otherwise submit the old card against the new board.
+ */
+export function useMoveBoardCard() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: {
+      repo: string;
+      projectId: string;
+      /** The membership's item id on `projectId` — what the write addresses. */
+      itemId: string;
+      field: BoardGroupField;
+      /** The column's option, or null for the board's "No {field}" column. */
+      option: ProjectFieldOptionDef | null;
+    }) =>
+      api.ghSetItemFieldValues(
+        args.repo,
+        args.projectId,
+        args.itemId,
+        args.option === null
+          ? []
+          : [
+              {
+                kind: "singleSelect",
+                fieldId: args.field.id,
+                optionId: args.option.id,
+              },
+            ],
+        args.option === null ? [args.field.id] : [],
+      ),
+    onMutate: async (args) => {
+      // Derived from the variables, like every other target here: `onMutate` runs
+      // before the pause so its own scope is safe, but one source of truth for
+      // WHERE the write lands is what keeps the settle handlers honest.
+      const key = projectItemsKey(args.repo, args.projectId);
+      const railKey = itemFieldValuesFamilyKey(args.repo);
+      await queryClient.cancelQueries({ queryKey: key });
+      // The one card's values, not the whole tree: that is all the rollback needs,
+      // and all it may safely carry.
+      const before = queryClient
+        .getQueryData<InfiniteData<BoardItems, string | null>>(key)
+        ?.pages.flatMap((page) => page.items)
+        .find((item) => item.itemId === args.itemId)?.fieldValues;
+      if (before !== undefined)
+        queryClient.setQueryData<InfiniteData<BoardItems, string | null>>(
+          key,
+          (data) =>
+            patchBoardItem(
+              data,
+              args.itemId,
+              withGroupValue(before, args.field, args.option),
+            ),
+        );
+      // The settle handlers read these, never their own scope: they too run on the
+      // latest render's options, so a mid-flight switch would otherwise roll the
+      // old board's values into the new board's key and invalidate the wrong repo's
+      // boards.
+      return { before, itemId: args.itemId, key, railKey, repo: args.repo };
+    },
+    // Reporting and rollback live here, not in the caller's `mutate` options: the
+    // context menu that fires this closes as it does, and react-query drops
+    // mutate-scoped callbacks once the observer loses its listeners.
+    onError: (e, _args, ctx) => {
+      if (ctx !== undefined && ctx.before !== undefined) {
+        const { key, itemId, before } = ctx;
+        queryClient.setQueryData<InfiniteData<BoardItems, string | null>>(
+          key,
+          (data) => patchBoardItem(data, itemId, before),
+        );
+      }
+      toastError(e);
+    },
+    // Cancel-before-invalidate on both families, for the reason
+    // {@link invalidateProjectBoards} states: a read already in flight would
+    // otherwise resolve afterwards and stamp itself fresh, erasing the
+    // invalidation. Invalidate-only past that — no forced refetch, so a rail
+    // behind a closed sidebar still re-reads on its own terms.
+    onSettled: (_d, _e, _args, ctx) => {
+      if (ctx === undefined) return;
+      invalidateProjectBoards(queryClient, ctx.repo);
+      void queryClient
+        .cancelQueries({ queryKey: ctx.railKey })
+        .then(() => queryClient.invalidateQueries({ queryKey: ctx.railKey }));
+    },
   });
 }
 
