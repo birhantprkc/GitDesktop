@@ -5,6 +5,7 @@ import { DisabledReasonButton } from "@/components/disabled-reason-button";
 import { LabeledGroup } from "@/components/form/labeled-group";
 import { LazyPanelFallback } from "@/components/lazy-panel-fallback";
 import { PathText } from "@/components/path-text";
+import { SelectClipText } from "@/components/select-clip-text";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -24,12 +25,20 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import { clipTitleFromText } from "@/lib/clip-title";
 import { isMac, isWindows } from "@/lib/hotkeys/binding";
 import { useGenerateChord } from "@/lib/hotkeys/useGenerateChord";
 import {
   useDetectedInterpreters,
   useResolvedInterpreter,
 } from "@/lib/scripts/interpreters";
+import { useTaskRepoKeys } from "@/lib/scripts/queries";
+import {
+  scopeRepoLabel,
+  TASK_SCOPE_GLOBAL,
+  TASK_SCOPE_UNKNOWN,
+  taskScope,
+} from "@/lib/scripts/scope";
 import {
   type ArgDoc,
   availableInterpreters,
@@ -63,6 +72,35 @@ type ArgDocRow = ArgDoc & { key: string };
 
 const toRows = (docs: ArgDoc[]): ArgDocRow[] =>
   docs.map((d) => ({ ...d, key: crypto.randomUUID() }));
+
+/**
+ * How a draft scoped outside the open repo describes itself: its Select option,
+ * and why the two repo-reading file controls are held. A malformed stored scope
+ * names no repository to open, so its copy points at the repair — pick a scope —
+ * rather than at a repo that doesn't exist.
+ */
+function elsewhereScopeCopy(scope: string): {
+  optionLabel: string;
+  chooseReason: string;
+  analyzeReason: string;
+} {
+  if (scope === TASK_SCOPE_UNKNOWN) {
+    // Both controls clear the same way, so they share one sentence.
+    const repair =
+      "This task's saved scope is unreadable — choose where it's available first";
+    return {
+      optionLabel: "Unreadable saved scope",
+      chooseReason: repair,
+      analyzeReason: repair,
+    };
+  }
+  const label = scopeRepoLabel(scope);
+  return {
+    optionLabel: `${label} — other repository`,
+    chooseReason: `Scoped to "${label}" — open that repository to pick a script from it`,
+    analyzeReason: `Scoped to "${label}" — open that repository to read its script`,
+  };
+}
 
 /** Make a picked absolute path relative to the repo root when it's inside it, so a
  *  task like `scripts/release.mjs` works in any repo that has it. Outside the repo,
@@ -129,6 +167,48 @@ export function TaskDialog({
   const [describe, setDescribe] = useState("");
   const [confirmBeforeRun, setConfirmBeforeRun] = useState(true);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [scope, setScope] = useState<string>(TASK_SCOPE_GLOBAL);
+
+  // Scope lookup keys for the open repo: [repoPath] while its identity resolves,
+  // [repoPath, identity] once it does. The canonical value the "This repository"
+  // option stores is the most-preferred (last) key — the identity once resolved,
+  // matching what the store folds a written scope onto.
+  const { keys: repoKeys } = useTaskRepoKeys(repoPath);
+  const thisRepoKey = repoKeys.length ? repoKeys[repoKeys.length - 1] : null;
+  // A legacy raw-path scope for the OPEN repo reads as "this repository" too
+  // (repoKeys carries both forms), so it selects that option rather than falling
+  // through to the other-repository one.
+  const scopedToThisRepo =
+    scope !== TASK_SCOPE_GLOBAL && repoKeys.includes(scope);
+  // The draft belongs to a repo that isn't the one open behind this dialog. Read
+  // from the DRAFT, not the saved task, so re-scoping to this repository releases
+  // the file-source controls in the same keystroke that adopts the task.
+  const scopedElsewhere = scope !== TASK_SCOPE_GLOBAL && !scopedToThisRepo;
+  // One source for every string a foreign scope produces here — the option label
+  // and both file-control reasons — so they can't disagree about what it is.
+  const elsewhereCopy = elsewhereScopeCopy(scope);
+  const scopeOptions: { value: string; label: string }[] = [
+    { value: TASK_SCOPE_GLOBAL, label: "All repositories" },
+  ];
+  if (repoPath && thisRepoKey)
+    scopeOptions.push({
+      value: thisRepoKey,
+      label: `This repository — ${scopeRepoLabel(repoPath)}`,
+    });
+  // A scope pointing at a DIFFERENT repo needs an option of its own: without one
+  // the Select can't represent its own value, and saving an untouched edit would
+  // silently re-scope the task to whatever the trigger happened to show. The value
+  // stays the stored scope verbatim whatever the label says.
+  if (scopedElsewhere)
+    scopeOptions.push({ value: scope, label: elsewhereCopy.optionLabel });
+  // The Select's value must equal an option value: normalize a this-repo scope
+  // held under a non-canonical key onto the option's canonical one. The
+  // `?? scope` arm is type-level only — `scopedToThisRepo` implies repoKeys is
+  // non-empty, which TS can't narrow across the check.
+  const selectedScope = scopedToThisRepo ? (thisRepoKey ?? scope) : scope;
+  const scopeItems = Object.fromEntries(
+    scopeOptions.map((o) => [o.value, o.label]),
+  );
 
   // The cheap `detected` pass above only checks PATH + known install dirs, so it
   // misses nvm/fnm-managed binaries when the app was launched from Finder/Dock
@@ -184,7 +264,12 @@ export function TaskDialog({
     setDescribe("");
     setConfirmBeforeRun(editing?.confirmBeforeRun ?? true);
     setConfirmDelete(false);
-  }, [open, editing, cancelGenerate, cancelAnalyze]);
+    // The task's stored scope verbatim; a new task belongs to the open repo.
+    // Whether that value is the canonical "this repository" key is decided at
+    // render (`selectedScope`), so a scope seeded before the identity resolved
+    // still lands on the right option once it does.
+    setScope(editing ? taskScope(editing) : (thisRepoKey ?? TASK_SCOPE_GLOBAL));
+  }, [open, editing, cancelGenerate, cancelAnalyze, thisRepoKey]);
 
   const trimmedName = name.trim();
   // Saving mid-stream would persist a half-written script, so an in-flight
@@ -196,6 +281,23 @@ export function TaskDialog({
     !scriptAnalyze.analyzing;
   const canAnalyze =
     sourceKind === "file" ? path.trim() !== "" : body.trim() !== "";
+  const analyzeEmptyReason =
+    sourceKind === "file"
+      ? "Choose a script file first"
+      : "Write or generate a script first";
+  // The file-source controls read the OPEN repo's tree — the picker relativizes
+  // against it and the analyzer reads through it — so on a task scoped elsewhere
+  // they would resolve a foreign relative path against the wrong checkout. An
+  // identity key can't be reversed to a checkout path (the owning repo may not be
+  // on disk at all), so the controls are held rather than retargeted. Inline
+  // sources are repo-independent and stay live.
+  const chooseBlockedReason = scopedElsewhere
+    ? elsewhereCopy.chooseReason
+    : null;
+  const analyzeBlockedReason =
+    scopedElsewhere && sourceKind === "file"
+      ? elsewhereCopy.analyzeReason
+      : null;
 
   async function choose() {
     const picked = await openDialog({
@@ -275,6 +377,10 @@ export function TaskDialog({
           description: d,
         })),
       confirmBeforeRun,
+      scope: selectedScope,
+      // Confirmations are the run surface's to record; the editor carries the
+      // task's existing ones through untouched.
+      runConfirmedIn: editing?.runConfirmedIn ?? [],
     });
   }
 
@@ -400,6 +506,36 @@ export function TaskDialog({
           />
         </div>
 
+        {/* No repo open means no choice to offer — the task stays global. */}
+        {repoPath && (
+          <div className="space-y-1.5">
+            <Label htmlFor="task-scope">Available in</Label>
+            <Select
+              // Without `items`, Base UI's SelectValue renders the RAW value —
+              // for an identity-keyed scope that's a bare "…/.git" path. The map
+              // makes the trigger show the option label.
+              items={scopeItems}
+              value={selectedScope}
+              onValueChange={(v) => v && setScope(v)}
+            >
+              <SelectTrigger id="task-scope" className="w-full">
+                <SelectValue onMouseEnter={clipTitleFromText} />
+              </SelectTrigger>
+              <SelectContent>
+                {scopeOptions.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    <SelectClipText>{o.label}</SelectClipText>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              A task is offered in the repository it belongs to. Choose all
+              repositories to reach it from every repo you open.
+            </p>
+          </div>
+        )}
+
         {/* Source: an existing file, or an inline body — with the AI analyzer
             alongside, since it documents whichever source is active. */}
         <div className="flex items-center justify-between gap-2">
@@ -444,12 +580,8 @@ export function TaskDialog({
                 variant="ghost"
                 size="xs"
                 className="text-muted-foreground"
-                disabled={!canAnalyze}
-                reason={
-                  sourceKind === "file"
-                    ? "Choose a script file first"
-                    : "Write or generate a script first"
-                }
+                disabled={!canAnalyze || analyzeBlockedReason !== null}
+                reason={analyzeBlockedReason ?? analyzeEmptyReason}
                 title="Read the script and fill in the name, description, and documented arguments"
                 onClick={runAnalyze}
               >
@@ -472,9 +604,15 @@ export function TaskDialog({
                 autoComplete="off"
                 spellCheck={false}
               />
-              <Button type="button" variant="outline" onClick={choose}>
+              <DisabledReasonButton
+                type="button"
+                variant="outline"
+                disabled={chooseBlockedReason !== null}
+                reason={chooseBlockedReason}
+                onClick={choose}
+              >
                 Choose…
-              </Button>
+              </DisabledReasonButton>
             </div>
             <p className="text-xs text-muted-foreground">
               Relative to the repository root — runs the live file, so edits to
