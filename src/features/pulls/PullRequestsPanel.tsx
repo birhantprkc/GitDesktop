@@ -312,22 +312,22 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   useHotkeyAction(
     "pr-preset-all",
     () => listFilter.setPreset("all"),
-    onPullsTab && canFilterMine,
+    onPullsTab && canFilterMine && listFilter.prefsReady,
   );
   useHotkeyAction(
     "pr-preset-mine",
     () => listFilter.setPreset("mine"),
-    onPullsTab && canFilterMine,
+    onPullsTab && canFilterMine && listFilter.prefsReady,
   );
   useHotkeyAction(
     "pr-preset-needs-review",
     () => listFilter.setPreset("needs-review"),
-    onPullsTab && canFilterMine && canGroupByReview,
+    onPullsTab && canFilterMine && canGroupByReview && listFilter.prefsReady,
   );
   useHotkeyAction(
     "pr-group-review",
     () => listFilter.setGroupByReview(!listFilter.groupByReview),
-    onPullsTab && canGroupByReview,
+    onPullsTab && canGroupByReview && listFilter.prefsReady,
   );
 
   // Palette path for the row context menu's record-management actions: they act
@@ -674,6 +674,7 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
             onPreset={listFilter.setPreset}
             canFilterMine={canFilterMine}
             canGroupByReview={canGroupByReview}
+            disabledReason={listFilter.prefsReason}
           />
         }
         lensControl={<RepoLensSwitcher repoPath={repoPath} />}
@@ -699,6 +700,7 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
             labelCount={labelCount}
             authorReason={authorReason}
             axisCap={axisCap}
+            disabledReason={listFilter.prefsReason}
             mine={{
               label: "Mine",
               disabledReason: mineReason,
