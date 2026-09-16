@@ -71,6 +71,7 @@ import {
   useProjectItems,
   useProjectViews,
   useRemoveBoardItem,
+  useUpdateDraftItem,
 } from "@/lib/git/queries";
 import {
   type BoardCandidate,
@@ -88,9 +89,11 @@ import { toastError } from "@/lib/toast";
 import { AddExistingItemsDialog, NewDraftDialog } from "./BoardAddDialogs";
 import { BoardCardMenuItems, type BoardMenuTarget } from "./BoardCardMenu";
 import { BoardColumn } from "./BoardColumn";
+import { BoardDraftEditDialog } from "./BoardDraftEditDialog";
 import {
   type BoardColumnModel,
   buildColumns,
+  CARD_WRITE_REASON,
   chipFieldDefs,
   firstCardPosition,
   groupableFields,
@@ -154,20 +157,21 @@ const CARD_WRITE_KINDS: ReadonlySet<BoardWriteKind> = new Set([
   "convert",
   "archive",
   "remove",
+  "edit-draft",
 ]);
 const ADD_WRITE_KINDS: ReadonlySet<BoardWriteKind> = new Set([
   "add-existing",
   "add-draft",
 ]);
 
+/** The board's dialogs, one open at a time. Two put work ON the board; the third
+ *  rewrites a draft already there, and is reached from that card's menu. */
+type BoardDialog = "existing" | "draft" | "edit-draft";
+
 /** Single-writer: two writes to one card's field settle in an order nothing
  *  promises, and an EARLIER move failing late puts the card back in a column a
  *  later write already moved it out of. */
 const MOVING_REASON = "Moving your last card…";
-/** Single-writer past the move, for the same reason and one step wider: an archive,
- *  a removal and a convert all change WHICH cards the board draws, so a second
- *  write fired over one in flight would settle against a board neither of them saw. */
-const CARD_WRITE_REASON = "Finishing your last card change…";
 /** An archive is reversible and a removal is not, so the two prompts say different
  *  things — and a removal says a THIRD thing for a draft, which lives on this
  *  project alone and has nowhere to survive. Every one names where the card goes
@@ -210,6 +214,27 @@ const VIEW_LAYOUT_WORD: Partial<Record<ProjectViewDef["layout"], string>> = {
   table: "table",
   roadmap: "roadmap",
 };
+
+/**
+ * One card per membership, LAST occurrence winning, applied where the pages flatten
+ * into the board. Every insert path inherits it by sitting here rather than in one
+ * writer.
+ *
+ * A write-through insert appends the minted card to the last LOADED page of a board
+ * whose server tail isn't loaded yet; `Load more` then fetches a tail that carries
+ * the same membership. Two copies of one `itemId` would mean duplicate React keys
+ * and two menu and move targets for one card.
+ *
+ * LAST wins because the later copy is the SERVER's: fresher, and at the board
+ * position the server puts it in, where the appended one sits wherever the insert
+ * could safely put it. Keeping the last occurrence's own slot is what moves the card
+ * to its real place the moment a real page supersedes the optimistic copy.
+ */
+function oneCardPerItem(items: BoardItem[]): BoardItem[] {
+  const lastAt = new Map<string, number>();
+  items.forEach((item, i) => lastAt.set(item.itemId, i));
+  return items.filter((item, i) => lastAt.get(item.itemId) === i);
+}
 
 /** A view's filter as the board's LENS. GitHub reports an unfiltered view as
  *  either null or an empty string, and sending `""` would key a second cache
@@ -465,7 +490,9 @@ export function ProjectsBoardPanel({
   // The cards on screen belong to the PREVIOUS lens until this clears, so every
   // claim derived from them waits: the count, Load more, and the move rows.
   const lensLoading = items.isPlaceholderData;
-  const loaded = items.data?.pages.flatMap((page) => page.items) ?? [];
+  const loaded = oneCardPerItem(
+    items.data?.pages.flatMap((page) => page.items) ?? [],
+  );
   // The view's sort orders cards WITHIN a column, so it applies after bucketing —
   // which column a card lands in is the grouping's answer alone. With no sort the
   // columns are untouched, board POSITION order and all.
@@ -642,6 +669,7 @@ export function ProjectsBoardPanel({
   // everything while it was still in flight.
   const move = useMoveBoardCard();
   const convertDraft = useConvertDraftItem();
+  const updateDraft = useUpdateDraftItem();
   const archiveItem = useArchiveBoardItem();
   const removeItem = useRemoveBoardItem();
   // The add writes live HERE rather than inside the dialogs that fire them, so the
@@ -673,15 +701,36 @@ export function ProjectsBoardPanel({
   );
   // The one card a write changes IN PLACE. An archive and a removal take their card
   // off the board outright, so the card's absence is already their feedback and
-  // there is nothing left to mark; a convert swaps the content under a card that
-  // stays put, which is the case that needs saying. The FIRST pending convert: the
-  // menu holds every card row while one runs, so a second is unreachable in
-  // practice, and the column prop stays the primitive its memo compares.
-  const convertingItemId =
-    pendingWrites.find((w) => w.kind === "convert")?.itemId ?? null;
-  /** Which add dialog is open, or null for neither. One at a time: both write to
-   *  the same board and the menu offers them as alternatives. */
-  const [addDialog, setAddDialog] = useState<"existing" | "draft" | null>(null);
+  // there is nothing left to mark; a convert and a draft edit both rewrite the
+  // content under a card that stays put, which is the case that needs saying. The
+  // FIRST such write: the menu holds every card row while one runs, so a second is
+  // unreachable in practice, and the column prop stays the primitive its memo
+  // compares.
+  const busyItemId =
+    pendingWrites.find((w) => w.kind === "convert" || w.kind === "edit-draft")
+      ?.itemId ?? null;
+  /** The card whose details peek is open, or null. Board-wide rather than per-card
+   *  so only one is ever open, and held HERE because both routes into it are — the
+   *  card's own Space key, and the menu row the panel owns. A card that leaves the
+   *  board takes its popup with it (the popover renders inside the card), so a stale
+   *  id here draws nothing and the next peek replaces it. */
+  const [peekItemId, setPeekItemId] = useState<string | null>(null);
+  /** Which of the board's dialogs is open, or null for none. One at a time: they
+   *  all write to the same board, and the toolbar and the card menu offer them as
+   *  alternatives. */
+  const [addDialog, setAddDialog] = useState<BoardDialog | null>(null);
+  /** What the edit dialog is editing, recorded at the MENU CLICK. Held by the panel
+   *  for the reason the session token below is: the dialog stays mounted across
+   *  open and close and replays its effects on an `<Activity>` show, so a starting
+   *  value it worked out for itself would describe whatever card it last saw. */
+  const [editing, setEditing] = useState<{
+    itemId: string;
+    /** The DRAFT's own content id — what the write addresses. */
+    draftId: string;
+    title: string;
+    body: string;
+    assigneeLogins: string[];
+  } | null>(null);
   /** Which run of an add dialog is current. A write can outlive the dialog that
    *  fired it (the panel owns the mutation, so Esc leaves it going), and this is
    *  what tells a resolution whether the dialog it was started from is still the
@@ -695,9 +744,10 @@ export function ProjectsBoardPanel({
    *  bumps it is a real retirement and guards on the value having changed.) */
   const dialogSessionRef = useRef(0);
 
-  /** Open or close an add dialog, retiring whatever session was running. Every
-   *  transition goes through here so the token can't drift from the state. */
-  function switchAddDialog(next: "existing" | "draft" | null) {
+  /** Open or close one of the board's dialogs, retiring whatever session was
+   *  running. Every transition goes through here so the token can't drift from the
+   *  state. */
+  function switchAddDialog(next: BoardDialog | null) {
     dialogSessionRef.current += 1;
     setAddDialog(next);
   }
@@ -903,9 +953,9 @@ export function ProjectsBoardPanel({
         return undefined;
     }
   })();
-  /** Why convert, archive and remove are held. Ranked like the move rows, and the
-   *  first two arms are the SAME permission flags — but the grouping arms are
-   *  absent: these three address the membership's item id alone, so an ungrouped
+  /** Why edit-draft, convert, archive and remove are held. Ranked like the move rows,
+   *  and the first two arms are the SAME permission flags — but the grouping arms are
+   *  absent: these four address the membership's item id alone, so an ungrouped
    *  board and a GitHub-owned grouping field hold neither of them. So does a lens
    *  still loading: the card under the pointer was recorded off the cards on
    *  screen, and its item id is its item id whichever view drew it. */
@@ -1025,9 +1075,10 @@ export function ProjectsBoardPanel({
    *  from the same place every other message about it does. Reports whether it
    *  landed: the dialog flips its row on `true` and leaves it pickable on `false`.
    *
-   *  NOT optimistic, unlike the removals. An add has no item id until GitHub mints
-   *  one, and a fabricated card is a card the menu and the move path can target —
-   *  the strip is the honest form of the same feedback. */
+   *  Never optimistic, and never fabricated: the card the board draws is the one
+   *  GitHub answered the write with, patched in at the settle, so the ids the menu
+   *  and the move path target are server-minted. The strip covers the window before
+   *  that answer arrives. */
   async function addExistingToBoard(
     candidate: BoardCandidate,
   ): Promise<boolean> {
@@ -1045,8 +1096,9 @@ export function ProjectsBoardPanel({
       return false;
     }
     // Neutral on purpose: under a filtered view the item may not appear in the
-    // columns at all, and GitHub's search index can lag its own write by seconds —
-    // so this says what happened, never where to look for it.
+    // columns at all, so this says what happened rather than where to look for it.
+    // The card itself lands with the write's own answer, so nothing here has to
+    // account for a read lagging behind it.
     toast.success(`Added to ${project.title}`);
     return true;
   }
@@ -1073,6 +1125,61 @@ export function ProjectsBoardPanel({
     // Only the run that fired this may be closed by it. A stale token means the
     // user has since closed, reopened, or been moved to another dialog — closing
     // then would shut whatever is open now and discard what was typed into it.
+    if (session === dialogSessionRef.current) switchAddDialog(null);
+  }
+
+  /** Open the edit dialog on a draft card, recording what it starts from HERE, at
+   *  the click. The dialog holds none of this: it stays mounted across open and
+   *  close, and an `<Activity>` show replays its effects, so a value it derived for
+   *  itself would outlive the card it came from. */
+  function openDraftEdit(item: BoardItem) {
+    // Belt-and-braces with the row's own hold, which is derived at render.
+    if (cardActionHeldReason !== undefined) return;
+    if (item.content.kind !== "draft") return;
+    setEditing({
+      itemId: item.itemId,
+      draftId: item.content.id,
+      title: item.content.title,
+      body: item.content.body,
+      assigneeLogins: item.content.assignees.map((a) => a.login),
+    });
+    switchAddDialog("edit-draft");
+  }
+
+  /** Write a draft's edit. Owned here for the same reasons the adds are: the write
+   *  outlives the dialog, and only this side can say whether the run that fired it
+   *  is still the one on screen. `assigneeLogins` arrives `undefined` when the dialog
+   *  saw no change to the picker, which leaves the draft's assignees untouched rather
+   *  than replacing them with what the capped board read seeded. */
+  async function saveDraftEdit(
+    title: string,
+    body: string,
+    assigneeLogins: string[] | undefined,
+  ): Promise<void> {
+    // Read before the round trip, like every other target here: a render landing
+    // mid-flight must not change what the write addressed.
+    const target = editing;
+    if (target === null) return;
+    const session = dialogSessionRef.current;
+    try {
+      await updateDraft.mutateAsync({
+        repo: repoPath,
+        itemId: target.itemId,
+        draftId: target.draftId,
+        title,
+        body,
+        assigneeLogins,
+      });
+    } catch {
+      // The mutation reported it. Nothing closes, so the dialog stays open over the
+      // edit and the text isn't lost to a failed write.
+      return;
+    }
+    // The card behind the dialog may be scrolled out of its column, so the write
+    // says so itself rather than leaving the patched card to be the only word.
+    toast.success("Draft updated");
+    // Only the run that fired this may be closed by it. A stale token means the user
+    // has since closed, reopened, or been moved to another dialog.
     if (session === dialogSessionRef.current) switchAddDialog(null);
   }
 
@@ -1510,13 +1617,15 @@ export function ProjectsBoardPanel({
                   column={column}
                   columnIndex={i}
                   activeIndex={liveCursor?.col === i ? liveCursor.idx : null}
-                  busyItemId={convertingItemId}
+                  busyItemId={busyItemId}
+                  peekItemId={peekItemId}
                   tabStopIndex={tabStop?.col === i ? tabStop.idx : null}
                   focusNonce={focusNonce}
                   repoSlug={repoSlug}
                   ghHost={ghHost}
                   chipFields={chipFields}
                   onCardFocus={onCardFocus}
+                  onPeekChange={setPeekItemId}
                   onOpen={openItem}
                 />
               ))}
@@ -1542,13 +1651,21 @@ export function ProjectsBoardPanel({
                   open: () => {
                     if (menuTarget !== null) openItem(menuTarget.item);
                   },
+                  showDetails: () => {
+                    if (menuTarget !== null)
+                      setPeekItemId(menuTarget.item.itemId);
+                  },
                   move: (columnIndex) => {
                     if (menuTarget !== null)
                       moveCard(menuTarget.item, columnIndex);
                   },
                   // Each reads `menuTarget` at CLICK time and hands the item down
-                  // by value: the menu closes as it fires, and the prompt each of
-                  // these raises outlives the target the latch is about to drop.
+                  // by value: the menu closes as it fires, and the prompt or dialog
+                  // each of these raises outlives the target the latch is about to
+                  // drop.
+                  editDraft: () => {
+                    if (menuTarget !== null) openDraftEdit(menuTarget.item);
+                  },
                   convert: () => {
                     if (menuTarget !== null) void convertCard(menuTarget.item);
                   },
@@ -1594,6 +1711,8 @@ export function ProjectsBoardPanel({
         key: write.mutationId,
         label: "Converting a draft to an issue…",
       });
+    } else if (write.kind === "edit-draft") {
+      pendingLines.push({ key: write.mutationId, label: "Saving a draft…" });
     }
   }
 
@@ -2030,6 +2149,24 @@ export function ProjectsBoardPanel({
             onOpenChange={(o) => switchAddDialog(o ? "draft" : null)}
             onCreate={createDraft}
           />
+          {/* Mounted with a card to edit, which the menu records before it opens
+              this. The seed values ride props for the reason `editing` is panel
+              state: a dialog that stays mounted across close can't be the thing
+              that remembers which card it was opened on. */}
+          {editing !== null && (
+            <BoardDraftEditDialog
+              key={`edit-draft-${projectId}`}
+              repoPath={repoPath}
+              lens={lens}
+              open={addDialog === "edit-draft"}
+              pending={cardWritePending}
+              seedTitle={editing.title}
+              seedBody={editing.body}
+              seedAssigneeLogins={editing.assigneeLogins}
+              onOpenChange={(o) => switchAddDialog(o ? "edit-draft" : null)}
+              onSave={saveDraftEdit}
+            />
+          )}
         </>
       )}
     </div>
