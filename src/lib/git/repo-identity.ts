@@ -1,5 +1,6 @@
 import type { Store } from "@tauri-apps/plugin-store";
 import { invoke } from "@/lib/tauri/invoke";
+import { ttlMemo } from "./identity-memo";
 
 // A repository's *worktree-stable identity key*: the absolute path of its common
 // git directory (`git rev-parse --git-common-dir`), which is identical for the
@@ -11,54 +12,84 @@ import { invoke } from "@/lib/tauri/invoke";
 // resolver; the MCP server calls the same Rust fn directly, so the GUI and MCP can
 // never disagree on the key.
 
-const identityCache = new Map<string, Promise<string>>();
-/** Resolved keys only, written where the IPC call succeeds — the synchronous view
- *  of {@link identityCache}, whose entries are Promises a peek cannot inspect.
- *  Holds whatever the resolver answered, including the Rust-side raw-path
- *  fallback for a live-but-unresolvable repo — callers keep treating
- *  `identity === repoPath` as "no identity". */
-const settledIdentities = new Map<string, string>();
+/** How long an answer stays authoritative before the next resolve re-asks git. A
+ *  checkout path can be deleted and re-cloned as a DIFFERENT repository inside one
+ *  session, and nothing in this module can observe that — an immortal memo then
+ *  mis-keys every per-repo store for the rest of the session, silently. Five
+ *  minutes bounds that mis-attribution to one window while staying clear of the
+ *  app's polling cadences (the 60s PR-sync tick, every query refetch): those keep
+ *  hitting the memo instead of minting a git spawn apiece. */
+export const IDENTITY_TTL_MS = 300_000;
 
-/** Resolve `repoPath` to its identity key (memoized per path), REJECTING when the
- *  IPC call fails. The Rust command owns the unresolvable-repo case itself and
- *  answers the raw path, so a rejection here is transport failure alone — callers
- *  that can retry (the query observers, via `repoIdentityQueryOptions`) need to
- *  see it. Only successes are cached; a failure drops its entry so a retry calls
- *  git again. */
+/** The memo itself is mechanics ({@link ttlMemo}, unit-tested there); this module
+ *  owns the policy. Ages come off the monotonic clock, never `Date.now()`: an NTP
+ *  correction or a user clock change would otherwise make a fresh entry look
+ *  arbitrarily old, or strand a stale one as fresh. The memo reads only
+ *  differences. It holds whatever the resolver answered, the Rust-side raw-path
+ *  fallback for a live-but-unresolvable repo included — callers keep treating
+ *  `identity === repoPath` as "no identity". */
+const memo = ttlMemo({
+  resolve: (repoPath) => invoke<string>("git_repo_identity", { repoPath }),
+  ttlMs: IDENTITY_TTL_MS,
+  now: () => performance.now(),
+});
+
+/** Resolve `repoPath` to its identity key (memoized per path for
+ *  {@link IDENTITY_TTL_MS}), REJECTING when the IPC call fails. The Rust command
+ *  owns the unresolvable-repo case itself and answers the raw path, so a rejection
+ *  here is transport failure alone. Rejection is the WRITER's contract and is never
+ *  softened with a remembered answer: a store write during an outage must refuse
+ *  rather than address itself by an identity nothing just confirmed — the path may
+ *  have changed hands since. Readers that would rather show continuity than an
+ *  error take {@link settledIdentityWithin} explicitly. */
 export function repoIdentityStrict(repoPath: string): Promise<string> {
-  const hit = identityCache.get(repoPath);
-  if (hit) return hit;
-  const p = invoke<string>("git_repo_identity", { repoPath })
-    .then((id) => {
-      settledIdentities.set(repoPath, id);
-      return id;
-    })
-    .catch((e) => {
-      identityCache.delete(repoPath);
-      throw e;
-    });
-  identityCache.set(repoPath, p);
-  return p;
+  return memo.get(repoPath);
 }
 
-/** The identity this session already learned for `repoPath`, or undefined when it
- *  has not resolved one. READ-ONLY on the memo: never resolves, never populates.
- *  For callers that must not RESOLVE — a dead path answers the raw-path fallback
- *  and would pin it for the session — but may honor an identity learned while the
- *  path was still alive. */
+/** The identity this session learned for `repoPath`, at any age, or undefined when
+ *  it never resolved one. READ-ONLY on the memo: never resolves, never populates.
+ *  For callers that must not RESOLVE — a dead path answers the raw-path fallback and
+ *  would pin it — but may honor an identity learned while the path was still alive.
+ *  Deliberately unaged, for both its consumers: the notification ladder asks about
+ *  checkouts that are GONE, which never re-stamp and whose identity-keyed mute has to
+ *  outlive the folder, and {@link repoIdentity}'s fallback must never expire into a
+ *  raw path that would redirect a write. */
 export function peekRepoIdentity(repoPath: string): string | undefined {
-  return settledIdentities.get(repoPath);
+  return memo.peek(repoPath);
+}
+
+/** {@link peekRepoIdentity} bounded by age — the seam for a query READER that would
+ *  rather show the last identity than an error while a re-validation is failing.
+ *  Reader-only by design: a bound is affordable where running out of it renders an
+ *  error body, and unaffordable where it would silently redirect a write (see
+ *  {@link repoIdentity}). `maxAgeMs` is the caller's policy — pick one comfortably
+ *  above the resolver's own timeout: ages run from the ISSUE stamp, so the window
+ *  can expire up to one resolver-timeout early. */
+export function settledIdentityWithin(
+  repoPath: string,
+  maxAgeMs: number,
+): string | undefined {
+  return memo.within(repoPath, maxAgeMs);
 }
 
 /** {@link repoIdentityStrict} for callers with nowhere to put a failure: never
- *  rejects, standing in the raw path when the IPC call fails — the same key the
- *  Rust fallback produces. For one-shot store/fold callers; observers that can
- *  retry use the strict form. */
+ *  rejects, standing in the LAST KNOWN identity when the IPC call fails, and in the
+ *  raw path only for a path this session never resolved — the same key the Rust
+ *  fallback produces. For one-shot store/fold callers; observers that can retry use
+ *  the strict form. */
 export async function repoIdentity(repoPath: string): Promise<string> {
   try {
     return await repoIdentityStrict(repoPath);
   } catch {
-    return repoPath;
+    // Unaged, unlike the query reader's bounded grace, because the two non-refusing
+    // surfaces lose differently. Here a fallback REDIRECTS a write: a raw-path
+    // record is one that healed reads never consult once an identity-keyed record
+    // exists, and identityKeyFor's once-per-session guard won't migrate it — the
+    // write is lost with nothing on screen. A reader running out of grace only
+    // renders an error body, which is visible and self-corrects. So a path resolved
+    // once never answers the raw path again; the TTL still heals a reused path
+    // within its window whenever git is answering at all.
+    return peekRepoIdentity(repoPath) ?? repoPath;
   }
 }
 
@@ -85,7 +116,9 @@ export function mergeById<T extends { id: string }>(
 // once per session and concurrent callers await the SAME fold (a single save)
 // rather than each redoing it. A rejected fold is dropped from the map so a later
 // call retries. Keyed `tag::repoPath` (a printable separator — never an invisible
-// sentinel, which git treats as a binary file).
+// sentinel, which git treats as a binary file). Deliberately NOT expired alongside
+// the identity memo: a path holds at most one legacy record, so a guard that
+// outlives a path changing hands only skips a fold with nothing left to move.
 const folds = new Map<string, Promise<void>>();
 
 /** Resolve `repoPath`'s identity key and, once, fold any record still stored under

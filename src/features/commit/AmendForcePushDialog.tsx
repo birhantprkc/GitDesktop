@@ -9,7 +9,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useSaveSettings, useSettings } from "@/lib/settings/queries";
+import { loadSettings } from "@/lib/settings/api";
+import { useSaveSettings } from "@/lib/settings/queries";
 import { useSeedOnOpen } from "@/lib/use-seed-on-open";
 
 /**
@@ -25,10 +26,12 @@ export function AmendForcePushDialog({
 }: {
   open: boolean;
   upstream: string | null;
-  onConfirm: () => void;
+  /** Starts the amend, resolving true once it actually began. False covers both
+   *  a gate refusal (a branch rule, or a read still settling) and a commit that
+   *  couldn't be loaded — either one holds the "Don't show again" write back. */
+  onConfirm: () => Promise<boolean>;
   onCancel: () => void;
 }) {
-  const settings = useSettings();
   const saveSettings = useSaveSettings();
   const [dontShowAgain, setDontShowAgain] = useState(false);
 
@@ -36,12 +39,21 @@ export function AmendForcePushDialog({
   useSeedOnOpen(open, () => setDontShowAgain(false));
 
   function confirm() {
-    if (dontShowAgain && settings.data) {
-      void saveSettings
-        .mutateAsync({ ...settings.data, confirmAmendForcePush: false })
-        .catch(() => undefined);
-    }
-    onConfirm();
+    // The preference waits on the amend having STARTED: a refusal or an
+    // unresolvable commit leaves the prompt in place. `dontShowAgain` stays the
+    // click-time value (the user's answer to THIS prompt); the settings object
+    // must not — the dialog closes before the amend resolves, so Settings is
+    // reachable during the wait and a snapshot from here would write back the
+    // pre-edit object. The write is best-effort; the amend already went ahead.
+    void (async () => {
+      if (!(await onConfirm())) return;
+      if (!dontShowAgain) return;
+      const fresh = await loadSettings();
+      await saveSettings.mutateAsync({
+        ...fresh,
+        confirmAmendForcePush: false,
+      });
+    })().catch(() => undefined);
   }
 
   return (

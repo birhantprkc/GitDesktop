@@ -1,4 +1,5 @@
 import type { ContextPack } from "./agent";
+import { branchPrefixSection } from "./branch-prefixes";
 import { distillReadme } from "./readme";
 import {
   budgetDiff,
@@ -85,7 +86,8 @@ export function buildCommitPrompt(input: CommitPromptInput): {
 const BRANCH_SYSTEM = `You generate a single git branch name for a set of code changes.
 Output ONLY the branch name — one line, nothing else: no quotes, no explanation, no markdown, no trailing period.
 Use lowercase kebab-case, 2-5 words, specific to what the change does (avoid generic names like "updates" or "changes").
-If the existing branch names below show a prefix convention (e.g. "feature/", "fix/", "chore/"), follow it; otherwise pick a fitting type prefix such as "feature/" or "fix/".
+When branch-prefix counts are listed below, take the prefix that fits this change from that list rather than inventing one; where the bare-names row leads, a bare name is the fitting choice.
+When no counts are listed, just name the change clearly — a conventional type prefix is optional there, neither required nor forbidden.
 Never use spaces, uppercase, or characters invalid in a git ref name.`;
 
 // KEEP IN SYNC: src-tauri/src/mcp_server/generate.rs mirrors this for the MCP recipe tools.
@@ -124,11 +126,8 @@ export function buildBranchNamePrompt(input: BranchNamePromptInput): {
     filesSection += `\n[${input.unreadableFiles} new file(s) left out because their names aren't readable text]`;
   }
   const promptParts = [filesSection];
-  if (input.recentBranches.length > 0) {
-    promptParts.push(
-      `## Existing branch names (convention reference)\n${input.recentBranches.join("\n")}`,
-    );
-  }
+  const prefixSection = branchPrefixSection(input.recentBranches);
+  if (prefixSection) promptParts.push(prefixSection);
   if (input.commitSubjects.length > 0) {
     promptParts.push(
       `## Commits on this branch (newest first)\n${input.commitSubjects.join("\n")}`,
