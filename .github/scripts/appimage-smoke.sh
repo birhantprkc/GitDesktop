@@ -2,16 +2,19 @@
 # Runtime smoke test for the Linux AppImage, run inside a modern-Mesa container
 # (fedora:44) against $APPIMAGE. The full gtk3 closure is required: linuxdeploy
 # excludes those libs from the bundle, so without them the app dies on a missing
-# host lib (e.g. libfribidi) long before EGL is reached. Three criteria, each
-# catching what the others miss: alive at the timeout (early crash), a live
-# WebKitWebProcess at 20s and no EGL-failure line (an EGL abort kills only the
-# web process, leaving the shell alive and sometimes silent).
+# host lib (e.g. libfribidi) long before EGL is reached. libglvnd-gles is named
+# explicitly because nothing else pulls it and bundled libepoxy reaches
+# libGLESv2.so.2 by dlopen — invisible to the bundler, so a missing GLES
+# surfaces only as an abort at startup. Three criteria, each catching what the
+# others miss: alive at the timeout (early crash), a live WebKitWebProcess at
+# 20s and no EGL-failure line (an EGL abort kills only the web process, leaving
+# the shell alive and sometimes silent).
 set -u
 
 : "${APPIMAGE:?APPIMAGE must point at the AppImage to test}"
 
 dnf -y -q install mesa-dri-drivers mesa-libEGL mesa-libGL libglvnd-egl libglvnd-glx \
-  gtk3 xorg-x11-server-Xvfb dbus-daemon procps-ng >/tmp/dnf.log 2>&1 || {
+  libglvnd-gles gtk3 xorg-x11-server-Xvfb dbus-daemon procps-ng >/tmp/dnf.log 2>&1 || {
   echo "DNF INSTALL FAILED"
   tail -n 40 /tmp/dnf.log || true
   exit 1
