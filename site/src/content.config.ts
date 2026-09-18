@@ -49,6 +49,9 @@ const blog = defineCollection({
         // A plain string, not image(): OG scrapers cache by URL and gain
         // nothing from a content-hashed, format-optimized asset.
         ogImage: z.string().optional(),
+        // Describes the CARD's artwork (og:image:alt / twitter:image:alt),
+        // not the post — the description field already covers the post.
+        ogImageAlt: z.string().optional(),
         draft: z.boolean().default(false),
         // Gates the post's CARD in the index under "Just Git" — never its body.
         ai: z.boolean().default(false),
@@ -60,6 +63,20 @@ const blog = defineCollection({
       .refine((d) => !d.heroImage || !!d.heroAlt, {
         message: "heroImage requires heroAlt (WCAG AA)",
         path: ["heroAlt"],
+      })
+      // Symmetric on purpose: a lone heroAlt is dead frontmatter.
+      .refine((d) => !d.heroAlt || !!d.heroImage, {
+        message: "heroAlt without heroImage describes nothing",
+        path: ["heroImage"],
+      })
+      .refine((d) => !d.ogImage || !!d.ogImageAlt, {
+        message: "ogImage requires ogImageAlt (WCAG AA)",
+        path: ["ogImageAlt"],
+      })
+      // Symmetric on purpose: alt without a card would describe og-default.
+      .refine((d) => !d.ogImageAlt || !!d.ogImage, {
+        message: "ogImageAlt without ogImage describes the default card",
+        path: ["ogImage"],
       }),
 });
 

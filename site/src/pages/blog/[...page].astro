@@ -28,6 +28,29 @@ const base = import.meta.env.BASE_URL;
 // Named so the "N AI posts hidden" line can state a real number rather than
 // leaving a Just-Git reader staring at a list that silently lost rows.
 const aiCount = page.data.filter((p) => p.data.ai).length;
+
+// Page 1 promotes the newest post to a featured card when it has one; the
+// slot degrades to a plain row on later pages or a cardless post.
+const featuredOg =
+  page.currentPage === 1 ? page.data[0]?.data.ogImage : undefined;
+const featured = featuredOg ? page.data[0] : undefined;
+const listed = featured ? page.data.slice(1) : page.data;
+
+// Mirrors Head.astro's withBase contract for the same field: absolute URLs
+// pass through, base-prefixed values aren't double-joined.
+const withBase = (p: string) =>
+  /^https?:/i.test(p) || p.startsWith(base)
+    ? p
+    : base.replace(/\/$/, "") + (p.startsWith("/") ? p : `/${p}`);
+const featuredCard = featuredOg ? withBase(featuredOg) : undefined;
+// og-blog.mjs always derives the .webp beside the .png, and the required
+// `guards` check (scripts/check-og-cards.mjs) fails any PR — and re-validates
+// direct master pushes — when either file is missing, so the <source> swap
+// rides that pair. Absolute-URL cards get the plain <img>.
+const featuredWebp =
+  featuredCard?.endsWith(".png") && !/^https?:/i.test(featuredCard)
+    ? featuredCard.replace(/\.png$/, ".webp")
+    : undefined;
 ---
 
 <SiteLayout
@@ -77,6 +100,65 @@ const aiCount = page.data.filter((p) => p.data.ai).length;
           </p>
         ) : (
           <>
+            {featured && (
+              /* The image is decorative here (alt="") — the anchor's own
+                 title and description name the destination, so the card adds
+                 no accessible information. An AI featured post hides whole in
+                 Just Git; list-only is that view's fallback, same honesty
+                 line as the rows. No border-b of its own: the list's border-y
+                 is the divider, and doubling it would 2px this seam only. */
+              <a
+                href={postUrl(featured)}
+                data-view={featured.data.ai ? "ai" : undefined}
+                class="group grid gap-8 py-10 lg:grid-cols-2 lg:items-center"
+              >
+                <div>
+                  <p class="text-sm text-faint">
+                    <span class="text-add">//</span> latest
+                  </p>
+                  <div class="mt-4 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm text-muted">
+                    <time datetime={isoDate(featured.data.pubDate)}>
+                      {formatDate(featured.data.pubDate)}
+                    </time>
+                    <span aria-hidden="true" class="text-faint">
+                      ·
+                    </span>
+                    <span>{readingTime(featured)} min read</span>
+                    {featured.data.ai && (
+                      <span class="key-chip">
+                        <span class="text-mint" aria-hidden="true">
+                          ✦
+                        </span>
+                        AI
+                      </span>
+                    )}
+                  </div>
+                  <h2 class="mt-3 max-w-[26ch] text-[clamp(1.5rem,3vw,1.75rem)] font-semibold tracking-tight underline decoration-line-2 underline-offset-4 transition-colors group-hover:decoration-mint">
+                    {featured.data.title}
+                  </h2>
+                  <p class="mt-4 max-w-[68ch] text-[15px] leading-relaxed text-body">
+                    {featured.data.description}
+                  </p>
+                </div>
+                <figure class="overflow-hidden rounded-lg border border-line bg-surface">
+                  <picture>
+                    {featuredWebp && (
+                      <source srcset={featuredWebp} type="image/webp" />
+                    )}
+                    <img
+                      src={featuredCard}
+                      alt=""
+                      width="1200"
+                      height="630"
+                      loading="eager"
+                      decoding="async"
+                      class="block h-auto w-full"
+                    />
+                  </picture>
+                </figure>
+              </a>
+            )}
+
             {aiCount > 0 && (
               /* Only rendered in the Just-Git view, where those rows are gone:
                  an index that silently drops half its entries reads as broken. */
@@ -94,38 +176,42 @@ const aiCount = page.data.filter((p) => p.data.ai).length;
             )}
 
             {/* A ruled list, not a card grid: this system reserves boxes and
-                shadows for .window, i.e. real product screenshots. */}
-            <ul class="divide-y divide-line border-y border-line">
-              {page.data.map((post) => (
-                <li data-view={post.data.ai ? "ai" : undefined}>
-                  <a href={postUrl(post)} class="group block py-7">
-                    <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm text-muted">
-                      <time datetime={isoDate(post.data.pubDate)}>
-                        {formatDate(post.data.pubDate)}
-                      </time>
-                      <span aria-hidden="true" class="text-faint">
-                        ·
-                      </span>
-                      <span>{readingTime(post)} min read</span>
-                      {post.data.ai && (
-                        <span class="key-chip">
-                          <span class="text-mint" aria-hidden="true">
-                            ✦
-                          </span>
-                          AI
+                shadows for .window (real product screenshots) and the one
+                featured-card figure above — a designed artifact in a hairline
+                frame, not a per-row treatment. */}
+            {listed.length > 0 && (
+              <ul class="divide-y divide-line border-y border-line">
+                {listed.map((post) => (
+                  <li data-view={post.data.ai ? "ai" : undefined}>
+                    <a href={postUrl(post)} class="group block py-7">
+                      <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm text-muted">
+                        <time datetime={isoDate(post.data.pubDate)}>
+                          {formatDate(post.data.pubDate)}
+                        </time>
+                        <span aria-hidden="true" class="text-faint">
+                          ·
                         </span>
-                      )}
-                    </div>
-                    <h2 class="mt-2 max-w-[36ch] text-xl font-semibold tracking-tight underline decoration-line-2 underline-offset-4 transition-colors group-hover:decoration-mint sm:text-2xl">
-                      {post.data.title}
-                    </h2>
-                    <p class="mt-3 max-w-[68ch] text-[15px] leading-relaxed text-body">
-                      {post.data.description}
-                    </p>
-                  </a>
-                </li>
-              ))}
-            </ul>
+                        <span>{readingTime(post)} min read</span>
+                        {post.data.ai && (
+                          <span class="key-chip">
+                            <span class="text-mint" aria-hidden="true">
+                              ✦
+                            </span>
+                            AI
+                          </span>
+                        )}
+                      </div>
+                      <h2 class="mt-2 max-w-[36ch] text-xl font-semibold tracking-tight underline decoration-line-2 underline-offset-4 transition-colors group-hover:decoration-mint sm:text-2xl">
+                        {post.data.title}
+                      </h2>
+                      <p class="mt-3 max-w-[68ch] text-[15px] leading-relaxed text-body">
+                        {post.data.description}
+                      </p>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            )}
           </>
         )
       }
