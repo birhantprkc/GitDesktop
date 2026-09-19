@@ -1,7 +1,7 @@
 import { SparkleIcon } from "@phosphor-icons/react";
 import { useSelector } from "@tanstack/react-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useEffectEvent } from "react";
+import { useEffect, useEffectEvent, useRef } from "react";
 import { toast } from "sonner";
 import { DIALOG_SCROLL } from "@/components/dialog-scroll";
 import { Button } from "@/components/ui/button";
@@ -23,7 +23,8 @@ import {
 } from "@/lib/git/queries";
 import { useGenerateChord } from "@/lib/hotkeys/useGenerateChord";
 import { useAiEnabled } from "@/lib/settings/queries";
-import { toastError } from "@/lib/toast";
+import { originNoteFor } from "@/lib/stores/notifications";
+import { toastError, toastErrorWithNote } from "@/lib/toast";
 import { useSeedOnOpen } from "@/lib/use-seed-on-open";
 import { cn } from "@/lib/utils";
 import { useGenerateRepoDescription } from "../repo-settings/useGenerateRepoDescription";
@@ -151,6 +152,15 @@ export function PublishDialog({
     readyDescription: "It's waiting in the dialog.",
     reopen: () => onOpenChange(true),
   });
+  // Which repo's draft the form holds — stamped on every open transition, ahead
+  // of the seed's skip arm (which holds a seed off only for a draft already this
+  // repo's). A dialog left open across a repo switch never re-seeds, so this
+  // still reads the submit's repo and the settle's close is the right one.
+  const draftRepoRef = useRef(repoPath);
+  // Which draft the form holds, bumped only where the seed actually reseeds. The
+  // repo stamp can't tell drafts apart within one repo: an A→B→A round trip
+  // restores the same path behind different content.
+  const seedGenRef = useRef(0);
   const isGitLab = provider === "gitlab";
   const isBitbucket = provider === "bitbucket";
   const isGitHub = provider === "github";
@@ -211,6 +221,7 @@ export function PublishDialog({
       isPrivate: true,
     },
     onSubmit: async ({ value }) => {
+      const submitGen = seedGenRef.current;
       const name = value.name.trim();
       // The publish backend takes `owner/repo` in `name`; compose it only for an
       // org — the viewer's own login publishes under the bare name, and a name
@@ -232,13 +243,25 @@ export function PublishDialog({
           topics: parseTopics(value.topics),
           workspace: isBitbucket ? value.workspace : undefined,
         });
+        // The publish can settle after a repo switch, and the header keeps this
+        // dialog mounted across one, so the close below answers to the draft's
+        // repo. The toast fires either way, naming the repo that was published.
+        const originNote = originNoteFor(repoPath);
         toast.success(`Published ${target}`, {
-          description: url,
+          description: originNote ? `${originNote} · ${url}` : url,
           action: { label: "View", onClick: () => openUrl(url) },
         });
-        onOpenChange(false);
+        // Closed whenever the form still holds THIS submit's draft — leaving an
+        // already-published draft open is a duplicate factory.
+        const ourDraft =
+          draftRepoRef.current === repoPath && seedGenRef.current === submitGen;
+        if (ourDraft) onOpenChange(false);
       } catch (e) {
-        toastError(e);
+        // Read at the failure, not before it: a publish that fails after a repo
+        // switch has to name the repo it belongs to, same as the success arm.
+        const originNote = originNoteFor(repoPath);
+        if (originNote) toastErrorWithNote(e, originNote);
+        else toastError(e);
       }
     },
   });
@@ -265,10 +288,12 @@ export function PublishDialog({
   const nameWarning = ghPickerActive ? ghNameWarning : NAME_WARNINGS[provider];
 
   const seedOnOpen = useEffectEvent(() => {
+    draftRepoRef.current = repoPath;
     // A generation still streaming — or one that settled while the dialog was
     // closed — leaves the description and topics in form state, which this
     // reset would blank on reopen.
     if (surface.shouldSkipSeed(descGen.generating)) return;
+    seedGenRef.current += 1;
     form.reset({
       name: defaultName,
       description: "",

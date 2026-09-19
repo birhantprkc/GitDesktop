@@ -17,8 +17,9 @@ import { required, useAppForm } from "@/lib/form";
 import { useGenerateChord } from "@/lib/hotkeys/useGenerateChord";
 import { useCreateLocalIssue } from "@/lib/issues/queries";
 import { useAiEnabled } from "@/lib/settings/queries";
+import { originNoteFor } from "@/lib/stores/notifications";
 import { useUiStore } from "@/lib/stores/ui";
-import { toastError } from "@/lib/toast";
+import { toastError, toastErrorWithNote } from "@/lib/toast";
 import { useSeedOnOpen } from "@/lib/use-seed-on-open";
 import { cn } from "@/lib/utils";
 import { useGenerateIssueDraft } from "./useGenerateIssueDraft";
@@ -52,20 +53,47 @@ export function CreateLocalIssueDialog({
   });
   /** The serialized explicit draft the current form state was seeded from. */
   const seededDraftRef = useRef<string | null>(null);
+  /** The repo whose draft the form holds. A dialog left open across a repo switch
+   *  never re-seeds, so this still reads the submit's repo and the settle's close
+   *  is the right one. */
+  const draftRepoRef = useRef(repoPath);
+  /** Which draft the form holds, bumped only where the seed actually reseeds. A
+   *  repo check can't tell drafts apart within one repo: closing and reopening
+   *  mid-create puts a fresh draft behind the same path. */
+  const seedGenRef = useRef(0);
 
   const form = useAppForm({
     defaultValues: { title: "", body: "" },
     onSubmit: async ({ value }) => {
+      const submitGen = seedGenRef.current;
       try {
         const issue = await createIssue.mutateAsync({
           title: value.title.trim(),
           body: value.body,
         });
-        toast.success(`Created local issue: ${issue.title}`);
-        selectIssue({ kind: "local", id: issue.id });
-        onOpenChange(false);
+        // The create can settle after a repo switch, and this dialog is retained
+        // across one: the selection answers to the live repo, the close to the
+        // draft's. The toast fires either way, naming where it came from.
+        const originNote = originNoteFor(repoPath);
+        const stillHere = originNote === undefined;
+        toast.success(`Created local issue: ${issue.title}`, {
+          description: originNote,
+        });
+        // Both axes of "still THIS submit's draft": the repo, since a seed under
+        // another one already replaced it, and the generation, since a close and
+        // reopen in this same repo reseeds a fresh draft behind the same path.
+        if (
+          draftRepoRef.current === repoPath &&
+          seedGenRef.current === submitGen
+        )
+          onOpenChange(false);
+        if (stillHere) selectIssue({ kind: "local", id: issue.id });
       } catch (e) {
-        toastError(e);
+        // The failure names its repo too, so one that landed away from the live
+        // one isn't read as belonging to whatever is on screen.
+        const originNote = originNoteFor(repoPath);
+        if (originNote) toastErrorWithNote(e, originNote);
+        else toastError(e);
       }
     },
   });
@@ -78,6 +106,7 @@ export function CreateLocalIssueDialog({
   // keepDefaultValues: otherwise the per-render options sync clobbers the
   // reset values back to empty on an untouched form.
   const seedOnOpen = useEffectEvent(() => {
+    draftRepoRef.current = repoPath;
     const key = initialDraft
       ? JSON.stringify([initialDraft.title, initialDraft.body])
       : null;
@@ -94,6 +123,7 @@ export function CreateLocalIssueDialog({
       // blank on reopen.
       return;
     }
+    seedGenRef.current += 1;
     form.reset(
       { title: initialDraft?.title ?? "", body: initialDraft?.body ?? "" },
       { keepDefaultValues: true },

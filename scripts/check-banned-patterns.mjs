@@ -684,6 +684,214 @@ const reexportsInternalSpecifiers = ({ text, starts }) => {
 const QUERIES_DIR = "src/lib/git/queries/";
 const QUERIES_BARREL = `${QUERIES_DIR}index.ts`;
 const QUERIES_INTERNAL = `${QUERIES_DIR}internal.ts`;
+const JIRA_QUERIES = "src/lib/jira/queries.ts";
+/** The local-entity query modules. Same repo-scoped create shape as the git
+ *  package, in their own directories, so they are named into scope one by one
+ *  rather than reached by a directory prefix. */
+const LOCAL_QUERIES = ["src/lib/pulls/queries.ts", "src/lib/issues/queries.ts"];
+
+// The mutation-identity family. Anchors are deliberately structural rather than
+// textual: react-query re-pushes a hook's options onto its PENDING mutation on
+// every render, so the defect is a repo-scoped call carrying no mutation key —
+// a shape, not a spelling.
+/** Any `function use…` declaration, exported or not. The generic list is matched
+ *  separately (see `paramListOpen`): `function useRepoMutation<TArgs, TData>(` puts
+ *  a `<` where a `(` would be, and an anchor demanding the paren swallows the whole
+ *  hook silently. */
+const HOOK_DECL_RE = /\b(export\s+)?function\s+(use[A-Za-z0-9_$]*)\s*(?=[<(])/g;
+const MUTATION_CALL_RE = /\buse(?:Repo)?Mutation\s*\(/g;
+/** `identity:` is useRepoMutation's spelling of `mutationKey:`; either pins. */
+const MUTATION_KEYED_RE = /\b(?:identity|mutationKey)\s*:/;
+/** A `repo` parameter in the hook's own signature — the closure that a mid-flight
+ *  switch redirects. A hook taking repo through its VARIABLES instead is the other
+ *  valid remedy (see useMoveBoardCard) and correctly never matches. */
+const REPO_PARAM_RE = /(?:^|[,{(\s])repo\s*[:,)]/;
+const CREATE_HOOK_RE = /Create/;
+/** Widest gap (normalized chars) still read as one callback for the seed arm.
+ *  Past it the seed is not seen and the site reads CLEAN — the bound fails toward
+ *  under-matching, so a long `onSuccess` body can hide its own `setQueryData`.
+ *  (Within the window an unrelated pair can also over-match, which is merely a
+ *  named file and line with the allowlist as its remedy.) */
+const SEED_WINDOW = 400;
+/** The GAP-5 shape: a response seeded into a hook-scope key on success, which a
+ *  retarget writes into the newly-live repo's cache with nothing to roll it back. */
+const ONSUCCESS_SEED_RE = new RegExp(
+  `\\bonSuccess\\s*:[\\s\\S]{0,${SEED_WINDOW}}?\\bsetQueryData\\b`,
+);
+
+/** Index of the balanced closer for the opener at `open`, or -1. Counts brackets
+ *  inside string literals too (`view` keeps them), so an unbalanced bracket in a
+ *  string would skew the span — zero instances in the scanned scope today. */
+function balancedEnd(text, open, o, c) {
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === o) depth++;
+    else if (text[i] === c) {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/** Index of the `(` opening a declaration's parameter list, stepping over a generic
+ *  list first, or -1. `>` preceded by `=` is an arrow inside a constraint, not a
+ *  close. */
+function paramListOpen(text, from) {
+  let i = from;
+  while (i < text.length && /\s/.test(text[i])) i++;
+  if (text[i] === "<") {
+    let depth = 0;
+    for (; i < text.length; i++) {
+      if (text[i] === "<") depth++;
+      else if (text[i] === ">" && text[i - 1] !== "=") {
+        depth--;
+        if (depth === 0) {
+          i++;
+          break;
+        }
+      }
+    }
+    while (i < text.length && /\s/.test(text[i])) i++;
+  }
+  return text[i] === "(" ? i : -1;
+}
+
+/** A parameter or argument list split on its TOP-LEVEL commas. `<`/`>` are not
+ *  counted as brackets — `=> Promise<T>` would otherwise drive the depth negative
+ *  and misplace every later comma. The residual is a comma inside a generic
+ *  (`Promise<Record<string, unknown>>`), which over-counts in BOTH directions: an
+ *  over-counted ARGUMENT list can hide a missing key, and an over-counted PARAMETER
+ *  list raises the required index so a call that does pass the key trips the check.
+ *  Zero-instance in the scanned modules today; a real generic parser is the fix. */
+function splitTopLevel(list) {
+  const out = [];
+  let depth = 0;
+  let cur = "";
+  for (const ch of list) {
+    if ("([{".includes(ch)) depth++;
+    else if (")]}".includes(ch)) depth--;
+    if (ch === "," && depth === 0) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim()).filter(Boolean);
+}
+
+/** Both spellings of a conditional key spread, the same name required on each side
+ *  so an unrelated pair can't match: `...(x ? { mutationKey: x } : {})` and
+ *  `...(x && { mutationKey: x })`. */
+const CONDITIONAL_KEY_SPREAD_RE =
+  /\.\.\.\(\s*([A-Za-z_$][\w$]*)\s*(?:\?\s*\{\s*mutationKey\s*:\s*\1\s*\}\s*:\s*\{\s*\}|&&\s*\{\s*mutationKey\s*:\s*\1\s*\})\s*\)/;
+
+/**
+ * The index of the wrapper parameter its mutation key is CONDITIONAL on — the
+ * spread the local PR/issue wrappers use — or -1 when the key is unconditional.
+ * `MUTATION_KEYED_RE` sees that spread and reads the wrapper as pinned no matter
+ * what its delegators pass, so the obligation moves to the delegating call: it has
+ * to supply the argument.
+ */
+function conditionalKeyParam(wrapper, text) {
+  for (const call of wrapper.body.matchAll(MUTATION_CALL_RE)) {
+    const open = wrapper.bodyOpen + call.index + call[0].length - 1;
+    const close = balancedEnd(text, open, "(", ")");
+    if (close < 0) continue;
+    const spread = text.slice(open, close).match(CONDITIONAL_KEY_SPREAD_RE);
+    if (!spread) continue;
+    const index = wrapper.params.findIndex((p) =>
+      new RegExp(`^${spread[1]}\\s*[?:]`).test(p),
+    );
+    if (index >= 0) return index;
+  }
+  return -1;
+}
+
+/** Every `function use…` in the file that takes a `repo`, as body spans. */
+function repoScopedHooks(text) {
+  const out = [];
+  for (const decl of text.matchAll(HOOK_DECL_RE)) {
+    const paramOpen = paramListOpen(text, decl.index + decl[0].length);
+    if (paramOpen < 0) continue;
+    const paramClose = balancedEnd(text, paramOpen, "(", ")");
+    if (paramClose < 0) continue;
+    if (!REPO_PARAM_RE.test(text.slice(paramOpen + 1, paramClose))) continue;
+    const bodyOpen = text.indexOf("{", paramClose);
+    if (bodyOpen < 0) continue;
+    const bodyClose = balancedEnd(text, bodyOpen, "{", "}");
+    if (bodyClose < 0) continue;
+    out.push({
+      name: decl[2],
+      exported: Boolean(decl[1]),
+      params: splitTopLevel(text.slice(paramOpen + 1, paramClose)),
+      bodyOpen,
+      body: text.slice(bodyOpen, bodyClose),
+    });
+  }
+  return out;
+}
+
+/**
+ * Scanner: create-family and cache-seeding mutations declared in a repo-scoped hook
+ * whose call carries no `identity:`/`mutationKey:`. Works on the whitespace-
+ * normalized whole-file view, so a key formatted across several lines — as the
+ * five-line jira-create-issue pin is — still reads as pinned.
+ *
+ * Delegation is resolved ONE level: a create hook that builds its mutation through a
+ * private wrapper in the same file (useCreateWebhook → useWebhookMutation) is checked
+ * at the wrapper, which is where the key has to go — and when that wrapper's key
+ * rides a conditional spread on an optional parameter, at the DELEGATING CALL too,
+ * which is the only place the difference is visible. The shapes this still cannot
+ * see are listed in the check's `message`, which is the single inventory; some of
+ * them are live, so a green run is not a clean bill for the whole class.
+ */
+const unpinnedMutationIdentity = ({ text, starts }) => {
+  const hits = new Set();
+  const hooks = repoScopedHooks(text);
+  const wrappers = hooks.filter((h) => !h.exported);
+  /** Unpinned mutation calls in `scope`, reported at their own line. */
+  const unpinned = (scope, accept) => {
+    for (const call of scope.body.matchAll(MUTATION_CALL_RE)) {
+      const callOpen = scope.bodyOpen + call.index + call[0].length - 1;
+      const callClose = balancedEnd(text, callOpen, "(", ")");
+      if (callClose < 0) continue;
+      const args = text.slice(callOpen, callClose);
+      if (MUTATION_KEYED_RE.test(args)) continue;
+      if (!accept(args)) continue;
+      hits.add(lineAt(starts, callOpen));
+    }
+  };
+  for (const hook of hooks) {
+    if (!hook.exported) continue;
+    const isCreate = CREATE_HOOK_RE.test(hook.name);
+    unpinned(hook, (args) => isCreate || ONSUCCESS_SEED_RE.test(args));
+    if (!isCreate) continue;
+    for (const wrapper of wrappers) {
+      const delegation = new RegExp(`\\b${wrapper.name}\\s*\\(`, "g");
+      let delegates = false;
+      // A conditionally-keyed wrapper is only pinned if the delegating call passes
+      // the argument the key hangs on; the wrapper body reads pinned either way.
+      // Depends on the wrapper alone, so it is resolved once per wrapper.
+      const needed = conditionalKeyParam(wrapper, text);
+      for (const call of hook.body.matchAll(delegation)) {
+        delegates = true;
+        if (needed < 0) continue;
+        const callOpen = hook.bodyOpen + call.index + call[0].length - 1;
+        const callClose = balancedEnd(text, callOpen, "(", ")");
+        if (callClose < 0) continue;
+        const passed = splitTopLevel(
+          text.slice(callOpen + 1, callClose),
+        ).length;
+        if (passed <= needed) hits.add(lineAt(starts, callOpen));
+      }
+      if (delegates) unpinned(wrapper, () => true);
+    }
+  }
+  return [...hits];
+};
 
 /**
  * A path-pinned check goes inert the moment its path moves: it scans nothing and
@@ -1157,6 +1365,48 @@ export const CHECKS = [
     expectScanned: { exactly: 1, hint: QUERIES_BARREL },
     message:
       "the queries barrel must never name ./internal at all — internal.ts is the one module deliberately left out of index.ts, and index.ts holds nothing but re-exports, so even an import of it there is a re-export waiting to happen; promote a helper into a domain module if it should be public",
+  },
+  {
+    name: "mutation-identity-pinning",
+    // The modules that declare repo-scoped mutation hooks: the git queries
+    // package, the Jira queries, and the two local-entity modules. The check is
+    // deliberately NARROWER than the convention it serves: the convention governs
+    // every mutation whose callbacks close over repo/lens, which is ~200 sites here,
+    // while this ratchet covers the two where a retarget is not self-healing — a
+    // create landing in the wrong repo, and a response seeded into the wrong repo's
+    // cache. The rest stay a review concern, not an exempted one.
+    // Within that boundary the scan still has named gaps (message lists them): it
+    // recognizes a create by NAME, so the `Add…`/`Submit…`/`Publish…`/`Fork…`
+    // spellings of one are invisible; and it follows delegation only to a `use…`
+    // wrapper in the SAME file, and only from a create hook. Widening the name
+    // heuristic makes each newly-seen site a pin-or-allowlist decision, so it is a
+    // deliberate follow-up — widen here rather than allowlisting the consequences.
+    // The local-entity wrappers keep their key OPTIONAL on purpose: making it
+    // mandatory would pin their update/delete hooks too, and those callers read
+    // `isPending` as a re-entry guard that a detach silently opens. That migration
+    // (isPending → a local submitting flag) is the recorded follow-up; until it
+    // lands, the delegating-call check above is what holds the create half.
+    appliesTo: (file) =>
+      (file.startsWith(QUERIES_DIR) && file.endsWith(".ts")) ||
+      file === JIRA_QUERIES ||
+      LOCAL_QUERIES.includes(file),
+    scan: unpinnedMutationIdentity,
+    allowlist: [
+      // useStackCreate renders a failed write inline off the mutation's OWN `error`
+      // and clears it with `reset()` (RemotePrView), so a detach would swallow the
+      // failure its catch deliberately stays silent for. Pinning needs that error
+      // path moved onto the awaited promise first. Covers the whole file, so a new
+      // create hook added HERE is masked — split the entry if that changes.
+      `${QUERIES_DIR}pr-write.ts`,
+    ],
+    // Floor near the real module count (33): a low floor would let a typo in
+    // QUERIES_DIR leave the scan almost entirely inert and still pass.
+    expectScanned: {
+      atLeast: 27,
+      hint: `${QUERIES_DIR}*.ts + ${JIRA_QUERIES} + ${LOCAL_QUERIES.join(" + ")}`,
+    },
+    message:
+      "a repo-scoped create or cache-seeding mutation must pin its identity (gd-conventions, 'Mutation identity pinning') — react-query re-pushes a hook's options onto its PENDING mutation on every render, so without a mutation key a repo switch mid-flight retargets the call, its callbacks and its cache writes to the newly-live repo; pass `identity: [\"<op>\", repo, …]` on useRepoMutation or `mutationKey: [\"<op>\", repo, …]` on a plain useMutation, naming exactly the hook-scope values the call closes over, and make sure every caller takes its continuation from `await mutateAsync` (a detached mutation's observer goes idle, so `isPending`/`data`/`error` reads stop tracking it) — or add an allowlist entry with rationale. This scan does NOT see seven shapes inside its own boundary, so review them by hand: a create whose NAME lacks 'Create' (the `Add…`/`Submit…`/`Publish…`/`Fork…` spellings — useAddRemote, useSubmitReview, useForkRepo and their siblings are all live), a mutation built through a wrapper in another MODULE, one built through a helper not named `use…`, a cache-seeding wrapper reached only from non-create hooks, a conditionally-keyed wrapper whose delegating call DOES pass the identity argument but passes something undefined or keyless in it (the call-site check counts arguments, it cannot evaluate them — src/lib/pulls/queries.ts and src/lib/issues/queries.ts are the live pair), a hook declared as `export const useX = (repo) => …` (the declaration anchor requires the `function` keyword), and one whose return type is an inline object literal (`): { … } {` — the body scan would take the return type as the body). The last two are zero-instance in the scanned modules today, so adding either shape means teaching this scanner first",
   },
 ];
 

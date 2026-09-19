@@ -69,8 +69,9 @@ import type { CommitSummary, GeneratedNotes } from "@/lib/git/types";
 import { useGenerateChord } from "@/lib/hotkeys/useGenerateChord";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useAiEnabled } from "@/lib/settings/queries";
+import { originNoteFor } from "@/lib/stores/notifications";
 import { useUiStore } from "@/lib/stores/ui";
-import { toastError } from "@/lib/toast";
+import { toastError, toastErrorWithNote } from "@/lib/toast";
 import { useSeedOnOpen } from "@/lib/use-seed-on-open";
 import { cn } from "@/lib/utils";
 import { useGenerateReleaseNotes } from "./useGenerateReleaseNotes";
@@ -194,10 +195,20 @@ export function CreateReleaseDialog({
     null,
   );
   const notesEditorRef = useRef<MarkdownEditorHandle>(null);
+  // Which repo's draft the form holds — stamped on every open transition, ahead
+  // of the seed's skip arms (those hold a seed off only for a draft already this
+  // repo's). A dialog left open across a repo switch never re-seeds, so this
+  // still reads the submit's repo and the settle's close is the right one.
+  const draftRepoRef = useRef(repoPath);
+  // Which draft the form holds, bumped only where the seed actually reseeds. The
+  // repo stamp can't tell drafts apart within one repo: an A→B→A round trip
+  // restores the same path behind different content.
+  const seedGenRef = useRef(0);
 
   const form = useAppForm({
     defaultValues: RELEASE_DEFAULTS,
     onSubmit: async ({ value }) => {
+      const submitGen = seedGenRef.current;
       const tag = value.tag.trim();
       if (!tag) return;
       const hasTarget = !initialTag && createdTags.includes(tag);
@@ -211,16 +222,28 @@ export function CreateReleaseDialog({
           draft: value.draft,
           latest: value.latest,
         });
+        // The create can settle after a repo switch, and this dialog is retained
+        // across one: the tag adoption answers to the live repo, the close to the
+        // draft's. The toast fires either way, naming where it came from.
+        const originNote = originNoteFor(repoPath);
+        const stillHere = originNote === undefined;
         toast.success(value.draft ? "Draft saved" : `Released ${tag}`, {
-          description: url,
+          description: originNote ? `${originNote} · ${url}` : url,
           action: { label: "View", onClick: () => openUrl(url) },
         });
-        onOpenChange(false);
-        // Adopt the new release's tag only while this repo is still on screen —
-        // the create can settle after a repo switch.
-        if (useUiStore.getState().repoPath === repoPath) selectTag({ tag });
+        // Closed whenever the form still holds THIS submit's draft — leaving an
+        // already-released draft open is a duplicate factory. Adopting the tag
+        // is a global write, so it takes the live-repo guard instead.
+        const ourDraft =
+          draftRepoRef.current === repoPath && seedGenRef.current === submitGen;
+        if (ourDraft) onOpenChange(false);
+        if (stillHere) selectTag({ tag });
       } catch (e) {
-        toastError(e);
+        // Read at the failure, not before it: a create that fails after a repo
+        // switch has to name the repo it belongs to, same as the success arm.
+        const originNote = originNoteFor(repoPath);
+        if (originNote) toastErrorWithNote(e, originNote);
+        else toastError(e);
       }
     },
   });
@@ -250,6 +273,7 @@ export function CreateReleaseDialog({
     : "";
 
   const seedOnOpen = useEffectEvent(() => {
+    draftRepoRef.current = repoPath;
     // A generation still streaming — or one that settled while the dialog was
     // closed — leaves the notes and the rest of the draft in form state, which
     // this reset would blank on reopen.
@@ -260,6 +284,7 @@ export function CreateReleaseDialog({
       (githubNotes.isPending && ghRunIsForThisIdentity())
     )
       return;
+    seedGenRef.current += 1;
     form.reset(
       {
         ...RELEASE_DEFAULTS,

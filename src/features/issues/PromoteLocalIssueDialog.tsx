@@ -28,12 +28,22 @@ import {
   useJiraPermissions,
 } from "@/lib/jira/queries";
 import { useSetRepoLens } from "@/lib/repo-lens/queries";
+import { originNoteFor, repoNameFromPath } from "@/lib/stores/notifications";
 import { useUiStore } from "@/lib/stores/ui";
 import { errorMessage } from "@/lib/tauri/invoke";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 type Destination = "forge" | "jira";
+
+/** Where a settle landed, from ONE store read: `live` is this repo still being the
+ *  one on screen, `away` the ` in <repo>` a toast title carries when it isn't.
+ *  Both derive from that single read, so the navigation gate and the copy can never
+ *  disagree about where the work ended up. Call it AFTER the await, never before. */
+function landedIn(repoPath: string): { live: boolean; away: string } {
+  const live = originNoteFor(repoPath) === undefined;
+  return { live, away: live ? "" : ` in ${repoNameFromPath(repoPath)}` };
+}
 
 /**
  * Publishes a local issue to a real tracker — the repo's forge (GitHub or
@@ -154,26 +164,48 @@ export function PromoteLocalIssueDialog({
       await closeLocalWithBackLink(
         `Promoted to ${remoteLabel} issue [#${number}](${url}).`,
       );
-      toast.success(`Opened issue #${number}`, {
+      // One read for both halves: the toast is unconditional and names the repo
+      // when it isn't the one on screen, while the navigation below only lands
+      // when it is — landed elsewhere it would close a dialog the user reopened
+      // there and point that repo's Issues tab at a number belonging to this one.
+      const { live, away } = landedIn(repoPath);
+      toast.success(`Opened issue #${number}${away}`, {
         description: url,
         action: { label: "View", onClick: () => openUrl(url) },
       });
-      onOpenChange(false);
       // The promoted issue lives on the fork (origin) — force the origin lens so
       // the Issues tab shows it (and any stale remote selection is cleared) before
       // navigating to it.
-      setLens("origin");
-      selectIssue({ kind: "remote", id: String(number) });
+      if (live) {
+        onOpenChange(false);
+        setLens("origin");
+        selectIssue({ kind: "remote", id: String(number) });
+      }
     } catch (e) {
       if (created === null) {
         // The create itself failed — retrying is correct, keep the dialog open.
         toastError(e);
         return;
       }
+      // The remote issue already exists. Close the dialog (leaving it open on this
+      // issue is a duplicate factory — the local issue wasn't closed, so it still
+      // reads as promotable) and disclose what was created and what failed. The
+      // close names its SUBJECT as well as its repo: the host keeps one
+      // `promoteOpen` state and already blanks it when the selection moves, so a
+      // close landing on another issue's confirm protects nothing here and shuts a
+      // dialog the user opened for something else.
       const { number, url } = created;
-      onOpenChange(false);
+      const ui = useUiStore.getState();
+      const { live, away } = landedIn(repoPath);
+      // The close needs the subject too; the toast names only the REPO, since that
+      // is the part the user can't see for themselves.
+      const onThisIssue =
+        live &&
+        ui.selectedIssue?.kind === "local" &&
+        ui.selectedIssue.id === issue.id;
+      if (onThisIssue) onOpenChange(false);
       toast.error(
-        `Created issue #${number}, but ${failedStep} failed: ${errorMessage(e)}`,
+        `Created issue #${number}${away}, but ${failedStep} failed: ${errorMessage(e)}`,
         {
           duration: 10000,
           action: { label: "View", onClick: () => openUrl(url) },
@@ -202,21 +234,37 @@ export function PromoteLocalIssueDialog({
       }
       failedStep = "closing the local issue";
       await closeLocalWithBackLink(`Promoted to Jira issue [${key}](${url}).`);
-      toast.success(`Created ${key}`, {
+      // Same one read as the forge path: the toast names its repo either way, the
+      // selection and close only land while that repo is the one on screen. The
+      // pinned `useJiraCreateIssue` means this continuation outlives the detach a
+      // switch causes, so it has to answer for where it ended up.
+      const { live, away } = landedIn(repoPath);
+      toast.success(`Created ${key}${away}`, {
         description: url,
         action: { label: "View", onClick: () => openUrl(url) },
       });
-      onOpenChange(false);
-      selectIssue({ kind: "jira", id: key });
+      if (live) {
+        onOpenChange(false);
+        selectIssue({ kind: "jira", id: key });
+      }
     } catch (e) {
       if (created === null) {
         toastError(e);
         return;
       }
+      // Same subject-and-repo close as the forge path: one `promoteOpen` for the
+      // whole view, blanked when the selection moves, so closing it from here
+      // would shut a confirm the user opened for a different issue.
       const { key, url } = created;
-      onOpenChange(false);
+      const ui = useUiStore.getState();
+      const { live, away } = landedIn(repoPath);
+      const onThisIssue =
+        live &&
+        ui.selectedIssue?.kind === "local" &&
+        ui.selectedIssue.id === issue.id;
+      if (onThisIssue) onOpenChange(false);
       toast.error(
-        `Created ${key}, but ${failedStep} failed: ${errorMessage(e)}`,
+        `Created ${key}${away}, but ${failedStep} failed: ${errorMessage(e)}`,
         {
           duration: 10000,
           action: { label: "View", onClick: () => openUrl(url) },

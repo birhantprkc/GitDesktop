@@ -19,6 +19,7 @@ import { providerLabel } from "@/lib/git/types";
 import type { LocalPr } from "@/lib/pulls/local";
 import { useUpdateLocalPr } from "@/lib/pulls/queries";
 import { useSetRepoLens } from "@/lib/repo-lens/queries";
+import { repoNameFromPath } from "@/lib/stores/notifications";
 import {
   LANE_BLOCKED_HINT,
   markPrCreated,
@@ -71,8 +72,10 @@ export function PromoteLocalPrDialog({
   // catch-up window after the forge answers, not just while the call runs, so
   // the hint reads the PHASE — a non-null one IS the lane. `!pending` narrows
   // to the RE-ENTRY case: promote claims the lane synchronously, so a phase is
-  // also present during this dialog's own run, where `pending` is the honest
-  // thing to show.
+  // also present during this dialog's own run, where `pending` is what to show —
+  // up to a cross-repo navigation that re-renders this view in place, which
+  // detaches the pinned create mutation: `pending` goes idle there while the
+  // promote runs on, and the phase read here is the new repo's.
   const lanePhase = usePrCreatePhase(repoPath, pr.head);
   const creatingElsewhere = lanePhase !== null && !pending;
   const laneHint = creatingElsewhere
@@ -146,28 +149,51 @@ export function PromoteLocalPrDialog({
           ],
         }),
       });
-      toast.success(`Opened ${prNoun} #${number}`, {
-        description: url,
-        action: { label: "View", onClick: () => openUrl(url) },
-      });
-      onOpenChange(false);
+      // One read for both halves: the toast is unconditional and names the repo
+      // when it isn't the one on screen, while the navigation below only lands
+      // when it is. That navigation is the lens flip plus the selection plus the
+      // close, and this continuation outlives the host's unmount on a repo
+      // switch: landed elsewhere they would close a dialog the user reopened
+      // there and point that repo's Pulls tab at a number belonging to this one.
+      const live = useUiStore.getState().repoPath === repoPath;
+      toast.success(
+        `Opened ${prNoun} #${number}${live ? "" : ` in ${repoNameFromPath(repoPath)}`}`,
+        {
+          description: url,
+          action: { label: "View", onClick: () => openUrl(url) },
+        },
+      );
       // The promoted PR lives on the fork (origin) — force the origin lens so the
       // Pulls tab shows it (clearing any stale remote selection) before selecting.
-      setLens("origin");
-      selectPr({ kind: "remote", id: String(number) });
+      if (live) {
+        onOpenChange(false);
+        setLens("origin");
+        selectPr({ kind: "remote", id: String(number) });
+      }
     } catch (e) {
       if (created === null) {
         // The create itself failed — retrying is correct, keep the dialog open.
         toastError(e);
         return;
       }
-      // The remote PR already exists. Close the dialog (leaving it open is a
-      // duplicate factory) and disclose what was created and what failed. The
-      // local PR is left untouched so the user can reconcile manually.
+      // The remote PR already exists. Close the dialog (leaving it open on this
+      // pull request is a duplicate factory — the local PR wasn't closed, so it
+      // still reads as promotable) and disclose what was created and what
+      // failed. The local PR is left untouched so the user can reconcile
+      // manually. The close names its SUBJECT as well as its repo: the host
+      // keeps one `promoteOpen` state and already blanks it when the selection
+      // moves, so a close landing on another pull request's confirm protects
+      // nothing here and shuts a dialog the user opened for something else.
       const { number, url } = created;
-      onOpenChange(false);
+      const ui = useUiStore.getState();
+      const live = ui.repoPath === repoPath;
+      // The close needs the subject too; the toast names only the REPO, since
+      // that is the part the user can't see for themselves.
+      const onThisPr =
+        live && ui.selectedPr?.kind === "local" && ui.selectedPr.id === pr.id;
+      if (onThisPr) onOpenChange(false);
       toast.error(
-        `Created ${prNoun} #${number}, but ${failedStep} failed: ${errorMessage(e)}`,
+        `Created ${prNoun} #${number}${live ? "" : ` in ${repoNameFromPath(repoPath)}`}, but ${failedStep} failed: ${errorMessage(e)}`,
         {
           duration: 10000,
           action: { label: "View", onClick: () => openUrl(url) },
