@@ -4,11 +4,13 @@ These are shadcn / Base UI primitives, normally regenerated rather than
 edited. Nine of them carry a sanctioned local delta for one cross-file
 contract: **panel-scoped portals plus activity-aware modality**. Repo tabs
 render inside `<Activity>` (`TabPanel` in `RepositoryView.tsx`), which
-conceals a hidden tab with CSS and keeps its subtree mounted. A popup that
-portals to `<body>` is not covered by that conceal, so it stays on screen
-over whichever tab the user switched to. The files below portal into the
-surrounding panel instead, and the two dialog-shaped ones also stand their
-modal state down while concealed.
+conceals a hidden tab and keeps its subtree mounted. Through react-dom 19.2 a
+popup that portalled to `<body>` sat outside that conceal and stayed on screen
+over whichever tab the user switched to; 19.3 reaches portal hosts and conceals
+it as well (measured; see *Check before re-applying*). The files below portal
+into the surrounding panel instead, which now buys containment rather than
+visibility, and the two dialog-shaped ones also stand their modal state down
+while concealed.
 
 ## Detecting a lost customization
 
@@ -27,17 +29,30 @@ rather than rewriting it from scratch. The marker imports are
 Coverage is partial and indirect. `pnpm run checks` runs
 `lone-activity-boundary`, which pins the `<Activity>` side of the contract
 (exactly one JSX `<Activity`, in `RepositoryView.tsx`) but cannot see a
-missing `container` prop here. Nothing else guards this folder, so the
-live smoke is the real proof: open a dialog from a repo tab, switch tabs
-and switch back. It must conceal with its tab and come back intact, never
-float over the new tab.
+missing `container` prop here. Nothing else guards this folder, so a live
+smoke is the remaining check. Two things decide whether one tests anything:
+
+- **Switch tabs by hotkey, not by clicking a tab.** An outside click
+  dismisses an open modal before it is ever concealed, so the click path
+  never reaches the behavior under test.
+- **Pick a trigger that sits inside a panel.** Several obvious ones do not:
+  `CommitDialog`, the commit box and its Co-authors popover all render above
+  `TabPanel`, so they never enter a concealed subtree. A changed-file row's
+  context menu does.
+
+Since 19.3 conceals body-level portals on its own, visibility no longer tells
+these deltas apart from their absence. What still does is containment: open a
+popup from a panel row, put text in a draft, round-trip the tabs, and confirm
+the draft and focus come back. For `dialog.tsx` / `sheet.tsx`, also confirm a
+concealed modal has released the document scroll lock and that Escape reaches
+the tab the user can see.
 
 ## The modifications
 
 - **`popover.tsx`**, **`select.tsx`**, **`combobox.tsx`**,
   **`hover-card.tsx`** — the `*Content` component reads
   `usePanelPortalContainer()` and passes it to its `Portal` as `container`.
-  Without it the popup renders at `<body>` and survives its tab's conceal.
+  Without it the popup renders at `<body>`, outside its panel's own DOM.
 - **`tooltip.tsx`** — same container read on `TooltipContent`'s inline
   portal. This one has no exported portal wrapper.
 - **`dropdown-menu.tsx`**, **`context-menu.tsx`** — the same container read
@@ -123,13 +138,17 @@ delta too, so check both of its markers.
 If one of these has to be re-created, confirm it is still needed. Verify
 first, then decide. Suspicion alone is not grounds for dropping one.
 
-1. **React's Activity visibility walk.** It styles only the topmost host
-   element per fiber path (react-dom latches on the first host it finds and
-   skips deeper ones), and a portal's DOM sits outside that element, so the
-   style never reaches it. If react-dom starts styling portal hosts too,
-   body-level portals would conceal on their own. Containment would still
-   carry draft preservation and stacking, so that weakens the argument
-   rather than ending it.
+1. **React's Activity visibility walk.** react-dom 19.3 reaches portal hosts
+   (a hidden `<Activity>` now conceals body-level portal contents itself), so
+   visibility is no longer what these deltas buy. Draft preservation and
+   stacking still are — judge a re-apply against those two grounds alone.
+   Measured on the same probe against both versions: a node portalled to
+   `<body>` from inside a hidden `<Activity>` keeps `display: block` on
+   19.2.8 and gets `display: none !important` on 19.3.0. If you re-run that
+   probe, keep a host element between the `<Activity>` and the portal, as a
+   real panel has. With the portal as a direct child of `<Activity>` the walk
+   reaches its fiber directly and 19.2.8 conceals it too, so the comparison
+   stops discriminating and reports the same verdict for the wrong reason.
 2. **Base UI gaining container-scoped modality**, or a modal that tracks
    visibility. That would subsume the `modal` flip and the dismissal
    suppression in `dialog.tsx` and `sheet.tsx`, though not the container

@@ -105,13 +105,13 @@ this standard in passing is welcome.
 
 ### Convention checks
 
-Six dependency-free Node scripts guard convention classes a past audit already
+Seven dependency-free Node scripts guard convention classes a past audit already
 paid to close once. Run them before pushing:
 
 ```sh
 # banned patterns · Rust invariants · OG card references ·
-# IPC surface drift · rule-mirror drift · Tauri npm/crate parity ·
-# guard self-tests
+# IPC surface drift · rule-mirror drift · skill-mirror drift ·
+# Tauri npm/crate parity · guard self-tests
 pnpm run checks
 ```
 
@@ -124,8 +124,10 @@ blog OG-card references (every post's `ogImage` must resolve to a committed
 card plus its `.webp` sibling — a missing file ships as a 404 social card),
 Tauri IPC drift (every registered command needs a caller, every `invoke()`
 a registration), drift between the files that restate the git-whitelist hard
-rule, and the major.minor parity of each Tauri package's npm and crate halves,
-each declared npm half needing a crate half to compare against.
+rule, drift between the two trees that ship the same skills (`.claude/skills/`
+for Claude Code, `.agents/skills/` for the other agent lanes), and the
+major.minor parity of each Tauri package's npm and crate halves, each declared
+npm half needing a crate half to compare against.
 
 The pattern, Rust-invariant, and surface checks carry allowlists, and they
 ratchet one way (rule-mirror drift and Tauri parity carry none — there is
@@ -135,6 +137,17 @@ way to quiet a fresh violation. The ratchet is enforced, not just documented —
 an entry that no longer suppresses anything (its site gone, or its command back
 in live use) fails the gate as a stale allowlist entry, so the PR that removes
 the site removes its entry too.
+
+Skill-mirror drift declares its skips rather than allowlisting sites: the ones
+rewritten per harness, and the ones living in a single tree, each entry naming
+the reason it belongs there. Those two lists do **not** ratchet the way the
+allowlists above do. The gate reports some stale skips as a `NOTE`: a *committed*
+single-tree skill that has gone absent from both trees, or an exempt skill whose
+copies now match exactly. Entries that are gitignored junction mounts are listed
+in `EXPECTED_ABSENT` and stay quiet, since being absent is their normal state off
+the machine that mounts them. A skip can still go stale with no signal at all, so
+treat both lists as reviewed prose a reader has to re-justify, not as
+self-cleaning.
 
 `knip` and `jscpd` run in the same workflow's `advisory` job — non-blocking on
 purpose. The job publishes unused-export and duplicate-code reports to the run
