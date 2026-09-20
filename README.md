@@ -669,6 +669,27 @@ pipeline says how much was lost. When one cause covers all three (no
 pipeline to read yet, or one problem across every category), a single card
 stands in for them.
 
+On a **Bitbucket** repo the tab reads the **Code Insights** reports
+published against your branch's tip commit (falling back to the default
+branch, and saying so), a section per report: its title, what it covers,
+the reporter, its result chip (Passed, Failed, Pending, or Unspecified
+when the tool posted none), its metrics strip (numbers, durations,
+percentages, dates, and pass/fail flags, each formatted for its own type),
+its description where the report carries one, and its **annotations**
+worst-first with severity and `path:line`. A provenance strip names the
+commit and ref the reports came from, linking the commit where Bitbucket
+gives a URL. That strip shows above the no-reports card too, so a commit
+with nothing published still says which commit and ref were read. Select
+an annotation for its type, location, reporter, result, and full text, and
+where the scanner attached a link, open it at the source it points to (an
+advisory page, the rule's docs), named by its host rather than by the
+forge. Coverage and test reports carry no annotations, so their section is
+the header, metrics, and description — and where no scanner has published
+anything yet, or a report's annotations couldn't be read, the tab says
+which of those it is rather than showing a clean list. Any pipe that
+writes Code Insights puts its results here, so a Bitbucket Pipelines
+scanner needs nothing extra to show up.
+
 ### Insights
 
 A repository-graphs tab (`Ctrl`/`⌘`+`9`): commit activity, code frequency
@@ -794,6 +815,9 @@ limit), and issues live in **Jira**; link a project (below).
   to run** (Default or a named custom one, with variables). Insights charts
   Pipeline durations and lists the repo's recently active forks, with a
   link-out to Bitbucket's Commits/Branches/Pipelines/Deployments.
+- **Code Insights**: the [Findings](#security-findings) tab lists the reports
+  published against your branch's tip commit, a section each, with their
+  metrics and annotations.
 - **Repo settings** (admin): **General** (description, website, language,
   fork policy, default branch), **default reviewers**, **branch
   restrictions** (block pushes/force-pushes/deletion, restrict merges,

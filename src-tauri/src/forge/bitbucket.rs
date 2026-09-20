@@ -141,7 +141,7 @@ impl Forge for BitbucketForge {
 }
 
 /// The workspace + repo slug (`{workspace}/{slug}`) from the repo's origin remote.
-async fn workspace_slug(repo_path: &str) -> AppResult<(String, String)> {
+pub(super) async fn workspace_slug(repo_path: &str) -> AppResult<(String, String)> {
     let url =
         crate::git::remote::git_remote_url(repo_path.to_string(), "origin".to_string()).await?;
     let path = crate::forge::remote_path(&url).ok_or_else(|| {
@@ -359,11 +359,11 @@ struct BbCloneLink {
 /// the same bound — the many single-page reads deserialize the envelope and ignore it,
 /// per the module's pagination policy.
 #[derive(Deserialize)]
-struct BbPage<T> {
+pub(super) struct BbPage<T> {
     #[serde(default = "Vec::new")]
-    values: Vec<T>,
+    pub(super) values: Vec<T>,
     #[serde(default)]
-    next: Option<String>,
+    pub(super) next: Option<String>,
     /// Total items matching the query, on the endpoints that document one (pipelines
     /// does; several others omit it) — `None` everywhere it's absent.
     #[serde(default)]
@@ -382,15 +382,17 @@ impl<T> Default for BbPage<T> {
 }
 
 /// Page bound shared by every `next`-following read — a hard stop so a pathological
-/// repo can't stall a panel behind unbounded requests. Pages past it are dropped
-/// silently: no error, no truncation flag, so the caller can't tell.
-const BB_MAX_PAGES: usize = 5;
+/// repo can't stall a panel behind unbounded requests. This module's walkers drop
+/// pages past it silently: no error, no flag, so the caller can't tell.
+/// `bitbucket_findings::walk` is the exception — it returns a remaining `next`
+/// as its `truncated` verdict.
+pub(super) const BB_MAX_PAGES: usize = 5;
 
 /// The next page's URL, or `None` when there is no page to follow. Three cases stop
 /// the walk: an ABSENT `next`, an EMPTY one, and one pointing anywhere but
 /// [`BB_API_BASE`] — the last because every request attaches the user's Basic
 /// credentials, so a server-supplied URL must never carry them off-host. Pure.
-fn next_page_url(next: Option<String>) -> Option<String> {
+pub(super) fn next_page_url(next: Option<String>) -> Option<String> {
     next.filter(|url| url.starts_with(BB_API_BASE))
 }
 
