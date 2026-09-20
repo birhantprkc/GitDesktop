@@ -573,7 +573,13 @@ column**, **edit a draft** (title, Markdown notes and assignees) or
 **convert it to a real issue**, **archive** the card (restorable from the
 project's archived items on GitHub), or **remove** it from the project. A
 move writes the board's grouping field and re-draws the card where it lands,
-keyboard place and all.
+keyboard place and all. `Alt`/`⌥`+`↑` and `Alt`/`⌥`+`↓` reorder the card you're
+on inside its column, `Alt`/`⌥`+`Home` and `Alt`/`⌥`+`End` send it to that
+column's top or bottom, and the card's menu and the command palette carry the
+same four moves. That order is the project's own, so it's the order GitHub
+shows everyone; hold the keys down and the board keeps up, writing where the
+card finally lands. A saved view that sorts says so instead, since its columns
+are drawn in the sort's order rather than the board's.
 Creating an issue puts it straight on a board too: the **New issue** dialog
 carries a **Projects** picker of its own. The board's **saved views** come
 along as lenses: pick one and GitHub filters the read for you, its sort
@@ -583,10 +589,10 @@ the cards, and its grouping seeds **Group by** while you stay free to
 regroup. Table and roadmap views are drawn as a board, and **Clear view**
 brings the whole item set back in the board's own order with the chips off,
 leaving the grouping where you last put it. Nothing here writes to the view.
-Adding, moving, editing a draft, converting, archiving and removing all need
-write access to the board and the `project` sign-in scope; reading one needs
-only the `project` or `read:project` scope the Projects picker already asks
-for.
+Adding, moving, reordering, editing a draft, converting, archiving and removing
+all need write access to the board and the `project` sign-in scope; reading one
+needs only the `project` or `read:project` scope the Projects picker already
+asks for.
 
 ### Code TODOs
 
