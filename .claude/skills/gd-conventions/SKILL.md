@@ -597,6 +597,16 @@ sweep stale "coming soon" mentions when a feature ships.
   once shipped in one such predicate). Extract to `scripts/check-*.mjs` with
   hit/miss fixtures in `scripts/checks.test.mjs`; the YAML step only invokes
   the script.
+- **Guard scripts default CLOSED on inputs they cannot read:** every
+  `scripts/check-*.mjs` enumerates its unreadable-input arms — unquoted or
+  folded YAML scalars, binary bytes, deleted/missing files, empty corpora,
+  non-string values, duplicate keys — and FAILS on them instead of skipping.
+  Mining minted the fail-open-checker-arm class on 12+ records across 6 PRs,
+  concentrated in the guard scripts the tripwire rule itself ships: a scanner
+  that exits 0 on input it could not parse approves exactly what it cannot
+  see. Each arm gets a miss fixture in `scripts/checks.test.mjs`, and an
+  empty-corpus / zero-files-matched result is a FAIL or an explicit annotated
+  skip, never a pass.
 
 ## Definition of done
 
