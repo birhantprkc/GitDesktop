@@ -491,14 +491,486 @@ pub struct WorkingLineStats {
     pub unstaged: Vec<DiffStatEntry>,
 }
 
+/// git's own binary sniff window: with no `.gitattributes` diff override in play, a
+/// NUL among a file's first 8000 bytes is what makes git report `-` counts, so an
+/// untracked file falls back to the same test.
+const BINARY_SNIFF_BYTES: usize = 8000;
+/// git's DEFAULT `core.bigFileThreshold`, past which git diffs a file as binary. The
+/// repo's effective value is resolved per call, and this reaches git as that read's
+/// `--default` for an unset key; a read that answers nothing readable blanks the
+/// untracked lane rather than falling back here.
+const BIG_FILE_BYTES_DEFAULT: u64 = 512 * 1024 * 1024;
+/// Ceiling on bytes one call may read across untracked files, spent in `ls-files`
+/// order — it bounds the 5s poll's I/O on a tree full of not-yet-ignored files. A
+/// hard ceiling, not an accounting one: the reader carries what is left of it as its
+/// own cap, so a file that grows after its size check still cannot read past it.
+const UNTRACKED_READ_BUDGET: u64 = 64 * 1024 * 1024;
+/// Read window for the line count: the only memory a file's size can influence,
+/// so no untracked file is ever held whole.
+const LINE_COUNT_CHUNK: usize = 64 * 1024;
+
+/// A path's `diff` attribute, for the paths `.gitattributes` decides. A custom driver
+/// name resolves through its `diff.<name>.binary` config; only an unconfigured driver,
+/// one set to `binary = auto`, or a path no rule names carries no verdict and falls
+/// back to the content sniff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiffAttr {
+    /// `-diff`, or a driver with `binary = true`: git diffs the path as binary
+    /// whatever its bytes are.
+    Binary,
+    /// `diff`, or a driver with `binary = false`: forced text, so a NUL in the
+    /// content must not flip the verdict.
+    ForcedText,
+}
+
+/// git's config-bool alphabet, case-insensitive: the named spellings, a VALUELESS key
+/// (`None`) as true, an empty value as false, and any DECIMAL integer, where non-zero
+/// is true (git also reads `0x` hex via strtoimax base 0; that spelling drops to the
+/// sniff here). A junk value is not a bool git can parse either — git FATALS the diff
+/// rather than choosing — so dropping the entry and letting the content sniff decide
+/// is strictly more graceful than what git itself does.
+fn git_config_bool(value: Option<&str>) -> Option<bool> {
+    let Some(value) = value else {
+        return Some(true);
+    };
+    let value = value.to_ascii_lowercase();
+    match value.as_str() {
+        "true" | "yes" | "on" | "1" => return Some(true),
+        "false" | "no" | "off" | "0" | "" => return Some(false),
+        _ => {}
+    }
+    // git reads an integer value as a bool by its zero-ness, and its scale suffixes
+    // multiply, so a non-zero numeric part cannot scale to zero — only that part is
+    // read here. (`0` and `1` answer above; both routes agree on them.)
+    let numeric = value.strip_suffix(['k', 'm', 'g']).unwrap_or(&value);
+    numeric.parse::<i64>().ok().map(|n| n != 0)
+}
+
+/// Parses `git config -z --get-regexp` output: NUL separates ENTRIES, and a newline
+/// separates each entry's key from its value — a valueless key carries no newline at
+/// all. Only a `diff.<driver>.binary` key whose value is a git bool carries a verdict;
+/// `<driver>` is everything between the prefix and the suffix, so a dotted driver name
+/// survives intact. `None` = the stream is not the shape this asked git for (a key
+/// outside the queried pattern), which is a probe FAILURE rather than an empty answer.
+/// Three cases skip their own entry instead: `auto`, the key's third value (the key is
+/// a tristate, not a bool), which asks for a content decision and so CLEARS any verdict
+/// an earlier scope set; any OTHER non-bool value, since git fatals on those and
+/// per-entry degrading is the gentler read; and an EMPTY driver name, since `[diff ""]`
+/// is legal config whose key is in-pattern.
+fn parse_diff_driver_binary(text: &str) -> Option<std::collections::HashMap<String, bool>> {
+    let mut flags = std::collections::HashMap::new();
+    for entry in text.split('\0').filter(|e| !e.is_empty()) {
+        let (key, value) = match entry.split_once('\n') {
+            Some((key, value)) => (key, Some(value)),
+            None => (entry, None),
+        };
+        // An off-pattern key means the stream is not what this asked for.
+        let name = key
+            .strip_prefix("diff.")
+            .and_then(|rest| rest.strip_suffix(".binary"))?;
+        // An empty subsection names no driver any `diff` attribute value could
+        // reference — check-attr never answers with an empty string.
+        if name.is_empty() {
+            continue;
+        }
+        // The key is a TRISTATE: `auto` means decide by content, which is what the
+        // sniff already does, and as a later match it CLEARS an earlier scope's
+        // verdict rather than leaving it standing.
+        if value.is_some_and(|value| value.eq_ignore_ascii_case("auto")) {
+            flags.remove(name);
+            continue;
+        }
+        let Some(binary) = git_config_bool(value) else {
+            continue;
+        };
+        // `--get-regexp` lists matches in git's own read order and `--get` documents
+        // taking the last one, so overwriting leaves the value git itself would use.
+        flags.insert(name.to_string(), binary);
+    }
+    Some(flags)
+}
+
+/// Every `diff.<driver>.binary` the repo configures. `None` = the probe FAILED (spawn,
+/// timeout, or an exit this cannot read as an answer) and the caller blanks the whole
+/// untracked lane; exit 1 is git's "no match" and answers with an empty map. Read
+/// through the raw runner because `run_git` folds every non-zero exit into one error,
+/// which would make the expected no-match indistinguishable from a real failure.
+async fn diff_driver_binary_flags(
+    repo_path: &str,
+) -> Option<std::collections::HashMap<String, bool>> {
+    let out = run_git_raw(
+        Some(repo_path),
+        &["config", "-z", "--get-regexp", r"^diff\..*\.binary$"],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    .ok()?;
+    match out.code {
+        0 => parse_diff_driver_binary(&out.stdout_lossy()),
+        1 => Some(std::collections::HashMap::new()),
+        _ => None,
+    }
+}
+
+/// Parses `git config -z --name-only --get-regexp` output: NUL-separated KEYS with no
+/// values. A `filter.<driver>.clean`/`.process` key is what makes a `filter` attribute
+/// value name a real driver; `<driver>` is everything between the prefix and the
+/// suffix, so a dotted driver name survives intact. `None` = a key outside the queried
+/// pattern, which means the stream is not the shape this asked for — a probe FAILURE,
+/// not an empty answer. An EMPTY driver name is not that case: `[filter ""]` is legal
+/// config and canonicalizes to an in-pattern key, so it skips its own entry and leaves
+/// the rest of the stream readable.
+fn parse_configured_filters(text: &str) -> Option<std::collections::HashSet<String>> {
+    let mut names = std::collections::HashSet::new();
+    for key in text.split('\0').filter(|k| !k.is_empty()) {
+        // An off-pattern key means the stream is not what this asked for.
+        let name = key.strip_prefix("filter.").and_then(|rest| {
+            rest.strip_suffix(".clean")
+                .or_else(|| rest.strip_suffix(".process"))
+        })?;
+        // An empty subsection names no driver any `filter` attribute value could
+        // reference — check-attr never answers with an empty string.
+        if name.is_empty() {
+            continue;
+        }
+        names.insert(name.to_string());
+    }
+    Some(names)
+}
+
+/// The filter drivers the repo actually configures. `None` = the probe FAILED and the
+/// caller blanks the whole untracked lane; exit 1 is git's "no match" and answers with
+/// an empty set. Raw runner for the same reason as [`diff_driver_binary_flags`].
+async fn configured_filter_drivers(repo_path: &str) -> Option<std::collections::HashSet<String>> {
+    let out = run_git_raw(
+        Some(repo_path),
+        &[
+            "config",
+            "-z",
+            "--name-only",
+            "--get-regexp",
+            r"^filter\..*\.(clean|process)$",
+        ],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    .ok()?;
+    match out.code {
+        0 => parse_configured_filters(&out.stdout_lossy()),
+        1 => Some(std::collections::HashSet::new()),
+        _ => None,
+    }
+}
+
+/// What `.gitattributes` says about one untracked path. The default — no `diff`
+/// verdict, no conversion — is what a path no rule names carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct PathAttrs {
+    diff: Option<DiffAttr>,
+    /// What git stores is a CONVERSION of the worktree bytes, so any count taken from
+    /// them is another file's: a `working-tree-encoding`, or a `filter` naming a driver
+    /// the repo configures.
+    converts: bool,
+}
+
+/// The attributes requested per path, in the order [`untracked_attr_output`] asks for
+/// them; `check-attr` answers one triple per attribute per path.
+const REQUESTED_ATTRS: [&str; 3] = ["diff", "working-tree-encoding", "filter"];
+
+/// Parses `check-attr -z` output: `path NUL attr NUL value NUL` triples, one per
+/// requested attribute per path. `None` = the stream does not divide into whole
+/// triples, a shape this cannot read, which is a probe FAILURE — the caller blanks the
+/// lane rather than letting sniff verdicts stand in for git's. An empty map is a
+/// legitimate answer (every triple `unspecified`). `drivers` resolves a value that
+/// names a custom diff driver and `filters` a value that names a content filter; one
+/// the repo does not configure stays unresolved, since only git knows what running it
+/// would decide.
+fn parse_path_attrs(
+    text: &str,
+    drivers: &std::collections::HashMap<String, bool>,
+    filters: &std::collections::HashSet<String>,
+) -> Option<std::collections::HashMap<String, PathAttrs>> {
+    let mut tokens: Vec<&str> = text.split('\0').collect();
+    // `-z` terminates every token, so the split's last element is empty.
+    if tokens.last() == Some(&"") {
+        tokens.pop();
+    }
+    let mut attrs: std::collections::HashMap<String, PathAttrs> = std::collections::HashMap::new();
+    if !tokens.len().is_multiple_of(3) {
+        return None;
+    }
+    for record in tokens.as_chunks::<3>().0 {
+        let (path, attr, value) = (record[0], record[1], record[2]);
+        match attr {
+            "diff" => {
+                let verdict = match value {
+                    "unset" => DiffAttr::Binary,
+                    "set" => DiffAttr::ForcedText,
+                    "unspecified" => continue,
+                    driver => match drivers.get(driver) {
+                        Some(true) => DiffAttr::Binary,
+                        Some(false) => DiffAttr::ForcedText,
+                        None => continue,
+                    },
+                };
+                attrs.entry(path.to_string()).or_default().diff = Some(verdict);
+            }
+            // git dies on a valueless `working-tree-encoding`, so blanking the row is
+            // strictly gentler than what it does; any value at all converts.
+            "working-tree-encoding" if value != "unspecified" && value != "unset" => {
+                attrs.entry(path.to_string()).or_default().converts = true;
+            }
+            // A `filter` converts only when it names a driver the repo CONFIGURES: git
+            // resolves the name to `filter.<name>.clean`/`.process`, and an unknown one
+            // (or a valueless `set`, which names nothing) stores the bytes verbatim.
+            // check-attr's reserved answers are excluded first, since a repo may also
+            // configure a driver literally called `set` or `unspecified`.
+            "filter"
+                if value != "unspecified"
+                    && value != "unset"
+                    && value != "set"
+                    && filters.contains(value) =>
+            {
+                attrs.entry(path.to_string()).or_default().converts = true;
+            }
+            _ => {}
+        }
+    }
+    Some(attrs)
+}
+
+/// `check-attr`'s raw `-z` stream for every enumerated path, in one batched spawn.
+/// `None` = the probe FAILED — `check-attr` has no expected non-zero exit, so `run_git`
+/// folding spawn, timeout and non-zero alike into one error is exactly the distinction
+/// this needs.
+async fn untracked_attr_output(repo_path: &str, paths: &[&str]) -> Option<String> {
+    if paths.is_empty() {
+        return Some(String::new());
+    }
+    let stdin: String = paths.iter().map(|p| format!("{p}\0")).collect();
+    let mut args = vec!["check-attr", "--stdin", "-z"];
+    args.extend(REQUESTED_ATTRS);
+    crate::git::runner::run_git_input(Some(repo_path), &args, Some(&stdin), DEFAULT_TIMEOUT)
+        .await
+        .ok()
+        .map(|out| out.stdout_lossy())
+}
+
+/// What one untracked file's read produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadOutcome {
+    /// Every line of a text file, all of them additions.
+    Counted { added: u32 },
+    /// A NUL inside the sniff window: the zero-count shape a `-` numstat row takes.
+    Binary,
+    /// The byte cap was reached with the file unfinished; the count would be partial,
+    /// so the caller emits nothing.
+    Incomplete,
+}
+
+/// The repo's effective `core.bigFileThreshold`. `--type=int` normalizes the `k`/`m`/`g`
+/// suffixes a user may have written and `--default` answers for an unset key. `None` =
+/// the probe FAILED: `--default` means an empty or unparsable answer is not something
+/// git should ever produce here, so reading one is a malformed result rather than a
+/// reason to fall back to the default.
+async fn untracked_big_file_threshold(repo_path: &str) -> Option<u64> {
+    let default = BIG_FILE_BYTES_DEFAULT.to_string();
+    run_git(
+        Some(repo_path),
+        &[
+            "config",
+            "--get",
+            "--type=int",
+            "--default",
+            &default,
+            "core.bigFileThreshold",
+        ],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    .ok()
+    .and_then(|out| out.stdout_lossy().trim().parse::<u64>().ok())
+}
+
+/// Counts `\n` bytes through a bounded buffer, plus the final unterminated line.
+/// The bytes are counted raw — numstat reports the worktree's own line endings, so a
+/// CRLF file still has one `\n` per line and nothing is converted here. With `sniff`
+/// on, a NUL inside the sniff window answers binary straight away, the shape a `-`
+/// numstat row takes; a path forced to text by `.gitattributes` passes `false`, since
+/// numstat counts its lines regardless.
+///
+/// `max_bytes` is a HARD cap, enforced per read: a file that grew since its size
+/// check cannot read past it, and reaching it with bytes left over is `Incomplete`
+/// rather than a truncated count. The consumed count rides alongside EVERY outcome,
+/// including the I/O error, so the caller's budget is charged for work that happened.
+fn count_untracked_lines(
+    file: &mut std::fs::File,
+    buf: &mut [u8],
+    sniff: bool,
+    max_bytes: u64,
+) -> (std::io::Result<ReadOutcome>, u64) {
+    use std::io::Read;
+
+    let mut sniff_left = if sniff { BINARY_SNIFF_BYTES } else { 0 };
+    let mut lines: u32 = 0;
+    let mut last: Option<u8> = None;
+    let mut consumed: u64 = 0;
+    while consumed < max_bytes {
+        let room = usize::try_from(max_bytes - consumed)
+            .unwrap_or(usize::MAX)
+            .min(buf.len());
+        let read = match file.read(&mut buf[..room]) {
+            Ok(read) => read,
+            Err(err) => return (Err(err), consumed),
+        };
+        if read == 0 {
+            return (Ok(counted(lines, last)), consumed);
+        }
+        consumed = consumed.saturating_add(read as u64);
+        let chunk = &buf[..read];
+        if sniff_left > 0 {
+            let window = &chunk[..read.min(sniff_left)];
+            if window.contains(&0) {
+                return (Ok(ReadOutcome::Binary), consumed);
+            }
+            sniff_left -= window.len();
+        }
+        let newlines = chunk.iter().filter(|b| **b == b'\n').count();
+        lines = lines.saturating_add(u32::try_from(newlines).unwrap_or(u32::MAX));
+        last = chunk.last().copied();
+    }
+    // At the cap: whether the file ended here is a question `fstat` answers without
+    // spending a byte, so the cap stays exact even when the file fits it precisely.
+    match file.metadata() {
+        Ok(meta) if consumed >= meta.len() => (Ok(counted(lines, last)), consumed),
+        Ok(_) => (Ok(ReadOutcome::Incomplete), consumed),
+        Err(err) => (Err(err), consumed),
+    }
+}
+
+/// numstat counts a final unterminated line, so content not ending in `\n` gets one
+/// more than it has `\n` bytes.
+fn counted(lines: u32, last: Option<u8>) -> ReadOutcome {
+    ReadOutcome::Counted {
+        added: if last.is_some_and(|b| b != b'\n') {
+            lines.saturating_add(1)
+        } else {
+            lines
+        },
+    }
+}
+
+/// Line counts for the untracked paths `git ls-files --others -z` named, as
+/// unstaged entries whose every line is an addition — the shape numstat reports
+/// for the same file once it is staged. Blocking reads, so callers run it off the
+/// async workers. Anything that is not a readable regular file is skipped instead
+/// of followed (a directory is a nested repo; a symlink must not be read through),
+/// as is any file whose read fails — a path deleted or locked mid-poll keeps the
+/// blank slot rather than failing the whole command.
+///
+/// `budget` is the bytes this call may still read; only a file whose size fits what
+/// is left is opened, so no count is ever truncated, and a file too big for the
+/// remainder is skipped ALONE — later, smaller files still get their counts.
+/// `attrs` carries the `.gitattributes` verdicts: the diff attribute, which outranks
+/// the sniff once a driver name has resolved through its config, and the conversion
+/// flag, which keeps a path git would re-encode or filter at the blank slot.
+/// `big_file_bytes` is the repo's effective `core.bigFileThreshold`.
+fn untracked_line_stats(
+    repo_path: &str,
+    ls_files_z: &str,
+    mut budget: u64,
+    big_file_bytes: u64,
+    attrs: &std::collections::HashMap<String, PathAttrs>,
+) -> Vec<DiffStatEntry> {
+    let root = std::path::Path::new(repo_path);
+    let mut buf = vec![0u8; LINE_COUNT_CHUNK];
+    let mut entries = Vec::new();
+
+    for rel in ls_files_z.split('\0').filter(|p| !p.is_empty()) {
+        if budget == 0 {
+            break;
+        }
+        let entry = |added: u32, is_binary: bool| DiffStatEntry {
+            path: rel.to_string(),
+            added,
+            deleted: 0,
+            is_binary,
+        };
+        let path = root.join(rel);
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let path_attrs = attrs.get(rel).copied().unwrap_or_default();
+        // `-diff` is the first content decision: numstat answers `-  -` from the
+        // attribute alone, even for an empty file or one a filter would rewrite, so
+        // neither a read nor a budget charge happens.
+        let sniff = match path_attrs.diff {
+            Some(DiffAttr::Binary) => {
+                entries.push(entry(0, true));
+                continue;
+            }
+            Some(DiffAttr::ForcedText) => false,
+            None => true,
+        };
+        // Content-affecting attributes split two ways. Count-CHANGING ones (`filter`,
+        // `working-tree-encoding`) make git store a conversion of these bytes, so any
+        // count taken here would be a different file's and the row stays blank.
+        // Count-NEUTRAL ones (`text`/`eol`/`ident`) preserve line counts — CRLF→LF and
+        // ident expansion rewrite bytes within a line — so the raw count already
+        // matches and nothing is needed for them.
+        if path_attrs.converts {
+            continue;
+        }
+        let len = meta.len();
+        if len == 0 {
+            // git numstat reports `0 0` for an empty file once staged.
+            entries.push(entry(0, false));
+            continue;
+        }
+        // The threshold governs UNSPECIFIED paths only: numstat counts a forced-text
+        // file's lines however big it is, and only an unmarked file past the threshold
+        // reports `-  -`. An oversized forced-text file is bounded by the read budget.
+        if sniff && len > big_file_bytes {
+            entries.push(entry(0, true));
+            continue;
+        }
+        if len > budget {
+            continue;
+        }
+        let Ok(mut file) = std::fs::File::open(&path) else {
+            continue;
+        };
+        let (outcome, consumed) = count_untracked_lines(&mut file, &mut buf, sniff, budget);
+        // Charged whatever the outcome: a refused or failed read still spent the I/O.
+        budget = budget.saturating_sub(consumed);
+        match outcome {
+            Ok(ReadOutcome::Counted { added }) => entries.push(entry(added, false)),
+            Ok(ReadOutcome::Binary) => entries.push(entry(0, true)),
+            // A partial read and a failed one both leave the row blank rather than
+            // report a count the file does not have.
+            Ok(ReadOutcome::Incomplete) | Err(_) => {}
+        }
+    }
+    entries
+}
+
 /// Line counts for the Changes panel's file rows, split by side so a file that
 /// is BOTH staged and re-edited reports each row's own numbers (never one
 /// shared or summed count). Read-only and lock-free like `status_core`, so it
-/// can ride the same 5s poll. Untracked paths appear on neither side: numstat
-/// only reports tracked changes, and those rows deliberately show no counts.
+/// can ride the same 5s poll. Untracked paths join the unstaged side with every
+/// line counted as an addition, read from the worktree because numstat reports
+/// tracked changes alone; their text-or-binary verdict comes from the path's
+/// `.gitattributes` diff attribute, with a custom driver name resolved through its
+/// `diff.<name>.binary` config and a content sniff as the fallback, so a row agrees
+/// with the diff pane git renders for the same file. A path git converts on the way in
+/// (`working-tree-encoding`, or a `filter` naming a configured driver) keeps the blank
+/// slot, since counting the unconverted bytes would report a different file's lines.
 #[tauri::command]
 pub async fn git_working_line_stats(repo_path: String) -> AppResult<WorkingLineStats> {
-    let (staged, unstaged) = tokio::try_join!(
+    let (staged, unstaged, untracked) = tokio::try_join!(
         run_git(
             Some(&repo_path),
             &["diff", "--cached", "--numstat", "-z"],
@@ -508,11 +980,66 @@ pub async fn git_working_line_stats(repo_path: String) -> AppResult<WorkingLineS
             Some(&repo_path),
             &["diff", "--numstat", "-z"],
             DEFAULT_TIMEOUT,
-        )
+        ),
+        // Enumerating untracked paths is the one arm allowed to fail: an error or a
+        // timeout here degrades to blank untracked slots, while a numstat failure is
+        // still an error, since blanking every tracked count is the worse answer.
+        // `ls-files` names paths relative to the CWD, so `repo_path` must be the
+        // worktree toplevel — `validate_repo` resolves it — or the entries mis-key.
+        async {
+            Ok::<String, AppError>(
+                run_git(
+                    Some(&repo_path),
+                    &["ls-files", "--others", "--exclude-standard", "-z"],
+                    DEFAULT_TIMEOUT,
+                )
+                .await
+                .map(|out| out.stdout_lossy())
+                .unwrap_or_default(),
+            )
+        }
     )?;
+    let mut unstaged_entries = parse_numstat_z(&unstaged.stdout_lossy());
+    let paths: Vec<&str> = untracked.split('\0').filter(|p| !p.is_empty()).collect();
+    // No probe matters without untracked paths, so an empty set spawns none of them.
+    // A FAILED probe must not substitute sniff semantics for git's: every path this
+    // tick keeps the blank slot it had before the feature, and the 5s poll retries.
+    let resolved = if paths.is_empty() {
+        Some((std::collections::HashMap::new(), BIG_FILE_BYTES_DEFAULT))
+    } else {
+        let (attr_output, big_file_bytes, drivers, filters) = tokio::join!(
+            untracked_attr_output(&repo_path, &paths),
+            untracked_big_file_threshold(&repo_path),
+            diff_driver_binary_flags(&repo_path),
+            configured_filter_drivers(&repo_path)
+        );
+        match (attr_output, big_file_bytes, drivers, filters) {
+            (Some(attr_output), Some(big_file_bytes), Some(drivers), Some(filters)) => {
+                parse_path_attrs(&attr_output, &drivers, &filters)
+                    .map(|attrs| (attrs, big_file_bytes))
+            }
+            _ => None,
+        }
+    };
+    if let Some((attrs, big_file_bytes)) = resolved {
+        // Counting lines is blocking file I/O, kept off the async workers this poll
+        // shares with every other repo operation.
+        let untracked_entries = tauri::async_runtime::spawn_blocking(move || {
+            untracked_line_stats(
+                &repo_path,
+                &untracked,
+                UNTRACKED_READ_BUDGET,
+                big_file_bytes,
+                &attrs,
+            )
+        })
+        .await
+        .unwrap_or_default();
+        unstaged_entries.extend(untracked_entries);
+    }
     Ok(WorkingLineStats {
         staged: parse_numstat_z(&staged.stdout_lossy()),
-        unstaged: parse_numstat_z(&unstaged.stdout_lossy()),
+        unstaged: unstaged_entries,
     })
 }
 
@@ -746,9 +1273,10 @@ mod tests {
         assert_eq!(noop.excluded_files, 0);
     }
 
-    /// Sets up a temp git repo with a deterministic identity. `core.autocrlf` is
-    /// pinned because these tests count LINES — an inherited global setting must
-    /// not reshape the fixture.
+    /// Sets up a temp git repo with a deterministic identity. These tests count LINES
+    /// and read ignore/attribute verdicts, so every source outside the fixture is shut
+    /// off: `core.autocrlf` pinned, `core.excludesFile` and `core.attributesFile`
+    /// emptied, and `.git/info/exclude` + `.git/info/attributes` truncated.
     async fn init_line_stats_repo(prefix: &str) -> (tempfile::TempDir, std::path::PathBuf, String) {
         let tmp = tempfile::Builder::new()
             .prefix(prefix)
@@ -761,17 +1289,68 @@ mod tests {
             vec!["config", "user.email", "t@t.local"],
             vec!["config", "user.name", "T"],
             vec!["config", "core.autocrlf", "false"],
+            vec!["config", "core.excludesFile", ""],
+            vec!["config", "core.attributesFile", ""],
         ] {
             run_git(Some(&repo), &args, DEFAULT_TIMEOUT).await.unwrap();
         }
+        // An `init.templateDir` can seed both of these into every `git init`: rules in
+        // `info/exclude` would join `--exclude-standard`, and `info/attributes`
+        // OUTRANKS the in-tree `.gitattributes` this fixture writes, so a developer's
+        // template would decide these tests. Truncating leaves the fixture's own rules.
+        let info = dir.join(".git").join("info");
+        std::fs::create_dir_all(&info).unwrap();
+        std::fs::write(info.join("exclude"), "").unwrap();
+        std::fs::write(info.join("attributes"), "").unwrap();
         (tmp, dir, repo)
+    }
+
+    /// The feature's real contract: an untracked row must already say what numstat
+    /// will say about the same file once it is staged. Stages the named paths, then
+    /// compares each one's staged row with the entry captured while it was untracked.
+    /// `core.autocrlf` is pinned in the fixture, so staging shifts nothing. Staging is
+    /// SCOPED to those names so a test can leave a path unstaged on purpose — a
+    /// converted one whose filter or encoder must not run here.
+    async fn assert_untracked_matches_staged(
+        repo: &str,
+        untracked: &[DiffStatEntry],
+        names: &[&str],
+    ) {
+        let mut args = vec!["add", "-A", "--"];
+        args.extend(names);
+        run_git(Some(repo), &args, DEFAULT_TIMEOUT).await.unwrap();
+        let staged = run_git(
+            Some(repo),
+            &["diff", "--cached", "--numstat", "-z"],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap()
+        .stdout_lossy();
+        let rows = parse_numstat_z(&staged);
+        for name in names {
+            let row = rows
+                .iter()
+                .find(|e| e.path == *name)
+                .unwrap_or_else(|| panic!("{name} has a staged numstat row"));
+            let entry = untracked
+                .iter()
+                .find(|e| e.path == *name)
+                .unwrap_or_else(|| panic!("{name} was counted while untracked"));
+            assert_eq!(
+                (entry.added, entry.deleted, entry.is_binary),
+                (row.added, row.deleted, row.is_binary),
+                "{name}: the untracked row must match staged numstat"
+            );
+        }
     }
 
     /// The panel's core invariant: a file that is staged AND re-edited reports
     /// DIFFERENT counts per side — staged is index vs HEAD, unstaged is working
-    /// tree vs index. Untracked files appear on neither side.
+    /// tree vs index. An untracked file rides the unstaged side alone, every
+    /// line an addition.
     #[tokio::test]
-    async fn working_line_stats_splits_sides_and_skips_untracked() {
+    async fn working_line_stats_splits_sides_and_counts_untracked() {
         let (_tmp, dir, repo) = init_line_stats_repo("gd-line-stats-test-").await;
 
         std::fs::write(dir.join("file.txt"), "a\nb\nc\n").unwrap();
@@ -806,12 +1385,772 @@ mod tests {
             .expect("unstaged side reports the file");
         assert_eq!((unstaged.added, unstaged.deleted), (3, 1));
 
-        for side in [&stats.staged, &stats.unstaged] {
-            assert!(
-                !side.iter().any(|e| e.path == "untracked.txt"),
-                "numstat never reports untracked paths"
+        let untracked = stats
+            .unstaged
+            .iter()
+            .find(|e| e.path == "untracked.txt")
+            .expect("the unstaged side counts the untracked file");
+        assert_eq!((untracked.added, untracked.deleted), (2, 0));
+        assert!(!untracked.is_binary);
+        assert!(
+            !stats.staged.iter().any(|e| e.path == "untracked.txt"),
+            "nothing untracked belongs on the staged side"
+        );
+    }
+
+    /// A NUL in the sniff window makes the entry read `bin` in the panel — the
+    /// exact shape numstat's `-\t-` row parses to.
+    #[tokio::test]
+    async fn working_line_stats_reports_untracked_binary() {
+        let (_tmp, dir, repo) = init_line_stats_repo("gd-line-stats-binary-test-").await;
+
+        std::fs::write(dir.join("blob.bin"), b"PNG\x00\x01\x02rest\nof it\n").unwrap();
+
+        let stats = git_working_line_stats(repo.clone()).await.unwrap();
+        let entry = stats
+            .unstaged
+            .iter()
+            .find(|e| e.path == "blob.bin")
+            .expect("the binary file still gets an entry");
+        assert_eq!((entry.added, entry.deleted), (0, 0));
+        assert!(entry.is_binary);
+
+        assert_untracked_matches_staged(&repo, &stats.unstaged, &["blob.bin"]).await;
+    }
+
+    /// numstat counts a final unterminated line, so a file with no trailing
+    /// newline reports one more line than it has `\n` bytes. An empty file is
+    /// its own case: present, with zero counts, and NOT binary.
+    #[tokio::test]
+    async fn working_line_stats_counts_final_line_and_empty_untracked() {
+        let (_tmp, dir, repo) = init_line_stats_repo("gd-line-stats-final-line-test-").await;
+
+        std::fs::write(dir.join("unterminated.txt"), "x\ny").unwrap();
+        std::fs::write(dir.join("empty.txt"), "").unwrap();
+
+        let stats = git_working_line_stats(repo.clone()).await.unwrap();
+        let unterminated = stats
+            .unstaged
+            .iter()
+            .find(|e| e.path == "unterminated.txt")
+            .expect("a file without a final newline is counted");
+        assert_eq!((unterminated.added, unterminated.deleted), (2, 0));
+        let empty = stats
+            .unstaged
+            .iter()
+            .find(|e| e.path == "empty.txt")
+            .expect("an empty file gets an entry of its own");
+        assert_eq!((empty.added, empty.deleted), (0, 0));
+        assert!(!empty.is_binary);
+
+        assert_untracked_matches_staged(&repo, &stats.unstaged, &["unterminated.txt", "empty.txt"])
+            .await;
+    }
+
+    /// The entry's path is the repo-relative, forward-slashed string `status
+    /// --untracked-files=all` reports, which is how the panel's rows find it.
+    #[tokio::test]
+    async fn working_line_stats_reports_nested_untracked_path() {
+        let (_tmp, dir, repo) = init_line_stats_repo("gd-line-stats-nested-test-").await;
+
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub").join("inner.txt"), "a\nb\nc\n").unwrap();
+
+        let stats = git_working_line_stats(repo).await.unwrap();
+        let entry = stats
+            .unstaged
+            .iter()
+            .find(|e| e.path == "sub/inner.txt")
+            .expect("the nested path is reported with forward slashes");
+        assert_eq!((entry.added, entry.deleted), (3, 0));
+    }
+
+    /// A `.gitattributes` diff override outranks the content sniff AND emptiness, so
+    /// an untracked row agrees with the diff pane git renders for the same file:
+    /// `-diff` reads `bin` on text content and on an empty file (numstat reports
+    /// `-  -` for a staged one), a forced `diff` counts the lines of NUL-bearing
+    /// content, and a path no rule names still sniffs (the control files, whose bytes
+    /// are the same as their attribute-marked twins'). A custom driver goes by its
+    /// `diff.<name>.binary` setting, and an unconfigured driver sniffs.
+    #[tokio::test]
+    async fn working_line_stats_honors_gitattributes_diff_overrides() {
+        let (_tmp, dir, repo) = init_line_stats_repo("gd-line-stats-attrs-test-").await;
+
+        std::fs::write(
+            dir.join(".gitattributes"),
+            "*.dat -diff\n*.forced diff\n*.byes diff=binyes\n*.bno diff=binno\n\
+             *.b2 diff=bintwo\n*.bauto diff=binauto\n*.plain diff=plaindrv\n",
+        )
+        .unwrap();
+        // `yes` and `2` rather than `true` so the parity assertions hold the bool parse
+        // to git's whole alphabet, named and integer; `binauto` pins the tristate's
+        // third value; `plaindrv` deliberately gets no `binary` setting, since an
+        // unconfigured driver is the arm that must sniff.
+        for args in [
+            vec!["config", "diff.binyes.binary", "yes"],
+            vec!["config", "diff.binno.binary", "false"],
+            vec!["config", "diff.bintwo.binary", "2"],
+            vec!["config", "diff.binauto.binary", "true"],
+            // Repeated key, `true` then `auto`: the stream carries both, and the later
+            // one has to clear the earlier verdict the way git's own last-match read
+            // does. A lone `auto` would pass whether or not it clears anything.
+            vec!["config", "--add", "diff.binauto.binary", "auto"],
+        ] {
+            run_git(Some(&repo), &args, DEFAULT_TIMEOUT).await.unwrap();
+        }
+        run_git(Some(&repo), &["add", "-A"], DEFAULT_TIMEOUT)
+            .await
+            .unwrap();
+        run_git(
+            Some(&repo),
+            &["commit", "-qm", "attributes"],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap();
+
+        std::fs::write(dir.join("text.dat"), "a\nb\nc\n").unwrap();
+        std::fs::write(dir.join("empty.dat"), "").unwrap();
+        std::fs::write(dir.join("bin.forced"), b"a\0b\nc\n").unwrap();
+        std::fs::write(dir.join("plain.txt"), "a\nb\nc\n").unwrap();
+        std::fs::write(dir.join("plain.bin"), b"a\0b\nc\n").unwrap();
+        std::fs::write(dir.join("clean.byes"), "a\nb\n").unwrap();
+        std::fs::write(dir.join("binfile.bno"), b"a\0b\nc\n").unwrap();
+        std::fs::write(dir.join("clean.b2"), "a\nb\n").unwrap();
+        std::fs::write(dir.join("clean.bauto"), "a\nb\n").unwrap();
+        std::fs::write(dir.join("clean.plain"), "a\nb\n").unwrap();
+
+        let stats = git_working_line_stats(repo.clone()).await.unwrap();
+        let seen = |name: &str| {
+            let e = stats
+                .unstaged
+                .iter()
+                .find(|e| e.path == name)
+                .unwrap_or_else(|| panic!("{name} is counted"));
+            (e.added, e.deleted, e.is_binary)
+        };
+        assert_eq!(seen("text.dat"), (0, 0, true), "`-diff` beats text content");
+        assert_eq!(seen("empty.dat"), (0, 0, true), "`-diff` beats emptiness");
+        assert_eq!(
+            seen("bin.forced"),
+            (2, 0, false),
+            "a forced `diff` beats a NUL"
+        );
+        assert_eq!(seen("plain.txt"), (3, 0, false));
+        assert_eq!(seen("plain.bin"), (0, 0, true));
+        assert_eq!(
+            seen("clean.byes"),
+            (0, 0, true),
+            "a driver's `binary = true` beats clean content"
+        );
+        assert_eq!(
+            seen("binfile.bno"),
+            (2, 0, false),
+            "a driver's `binary = false` beats a NUL"
+        );
+        assert_eq!(
+            seen("clean.b2"),
+            (0, 0, true),
+            "a driver's integer `binary = 2` is true like any non-zero"
+        );
+        assert_eq!(
+            seen("clean.bauto"),
+            (2, 0, false),
+            "a driver's `binary = auto` asks for the content decision"
+        );
+        assert_eq!(
+            seen("clean.plain"),
+            (2, 0, false),
+            "an unconfigured driver leaves the sniff in charge"
+        );
+
+        assert_untracked_matches_staged(
+            &repo,
+            &stats.unstaged,
+            &[
+                "text.dat",
+                "empty.dat",
+                "bin.forced",
+                "plain.txt",
+                "plain.bin",
+                "clean.byes",
+                "binfile.bno",
+                "clean.b2",
+                "clean.bauto",
+                "clean.plain",
+            ],
+        )
+        .await;
+    }
+
+    /// A path whose content git CONVERTS on the way in — `working-tree-encoding` or a
+    /// `filter` — keeps the blank slot: the poll refuses to run conversions (arbitrary
+    /// user commands from a read-only 5s poll), and counting the unconverted worktree
+    /// bytes would report a different file's lines. `-diff` still wins over that,
+    /// since its `(0, 0, bin)` comes from the attribute without reading content.
+    #[tokio::test]
+    async fn working_line_stats_blanks_converted_paths() {
+        let (_tmp, dir, repo) = init_line_stats_repo("gd-line-stats-convert-test-").await;
+
+        std::fs::write(
+            dir.join(".gitattributes"),
+            "*.u16 working-tree-encoding=UTF-16\n*.lfs filter=fake\n*.lfs2 filter=ghost\n\
+             both.dat -diff filter=fake\n",
+        )
+        .unwrap();
+        // `fake` is configured, so git would resolve and run it; `ghost` is named by an
+        // attribute but configured nowhere, which is why its path still counts. The
+        // clean command never runs here — the blanked paths are never staged.
+        run_git(
+            Some(&repo),
+            &["config", "filter.fake.clean", "cat"],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        run_git(Some(&repo), &["add", "-A"], DEFAULT_TIMEOUT)
+            .await
+            .unwrap();
+        run_git(
+            Some(&repo),
+            &["commit", "-qm", "attributes"],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap();
+
+        // UTF-16LE with a BOM: NUL-interleaved, so the content sniff would call it
+        // binary while numstat counts the lines of git's UTF-8 conversion.
+        let mut utf16 = vec![0xFF, 0xFE];
+        for byte in "alpha\nbeta\ngamma\n".bytes() {
+            utf16.push(byte);
+            utf16.push(0);
+        }
+        std::fs::write(dir.join("doc.u16"), &utf16).unwrap();
+        std::fs::write(dir.join("data.lfs"), "one\ntwo\n").unwrap();
+        std::fs::write(dir.join("loose.lfs2"), "one\ntwo\n").unwrap();
+        std::fs::write(dir.join("both.dat"), "one\ntwo\n").unwrap();
+        std::fs::write(dir.join("plain.txt"), "one\ntwo\n").unwrap();
+
+        let stats = git_working_line_stats(repo.clone()).await.unwrap();
+        let found = |name: &str| stats.unstaged.iter().find(|e| e.path == name);
+        assert!(
+            found("doc.u16").is_none(),
+            "an encoded path keeps its blank slot, got {:?}",
+            found("doc.u16")
+        );
+        assert!(
+            found("data.lfs").is_none(),
+            "a filtered path keeps its blank slot, got {:?}",
+            found("data.lfs")
+        );
+        let both = found("both.dat").expect("`-diff` answers without reading content");
+        assert_eq!(
+            (both.added, both.deleted, both.is_binary),
+            (0, 0, true),
+            "`-diff` outranks the conversion blank"
+        );
+        let loose = found("loose.lfs2").expect("an unconfigured filter name converts nothing");
+        assert_eq!((loose.added, loose.deleted, loose.is_binary), (2, 0, false));
+        let plain = found("plain.txt").expect("the control file is still counted");
+        assert_eq!((plain.added, plain.deleted), (2, 0));
+
+        // Staging `loose.lfs2` succeeds and stores the bytes verbatim precisely because
+        // no driver answers to `ghost`; the blanked paths stay out of this call.
+        assert_untracked_matches_staged(&repo, &stats.unstaged, &["loose.lfs2", "plain.txt"]).await;
+    }
+
+    /// The reader's hard cap. A file bigger than the cap stops at exactly the cap and
+    /// answers `Incomplete` — never a truncated count — while a cap the file fits
+    /// under, INCLUDING one equal to its size, reads it whole. The consumed count is
+    /// what the caller charges, so it must be exact in both directions.
+    #[test]
+    fn count_untracked_lines_stops_at_its_byte_cap() {
+        let tmp = tempfile::Builder::new()
+            .prefix("gd-line-cap-test-")
+            .tempdir()
+            .expect("create temp dir");
+        let path = tmp.path().join("grown.txt");
+        std::fs::write(&path, "a\nb\nc\nd\n").unwrap();
+        let mut buf = vec![0u8; LINE_COUNT_CHUNK];
+
+        let mut file = std::fs::File::open(&path).unwrap();
+        let (outcome, consumed) = count_untracked_lines(&mut file, &mut buf, true, 5);
+        assert_eq!(consumed, 5, "the cap is exact, not a buffer boundary");
+        assert_eq!(outcome.unwrap(), ReadOutcome::Incomplete);
+
+        // A cap AT the file's size is not a partial read — the file ends there.
+        for cap in [8, 64] {
+            let mut file = std::fs::File::open(&path).unwrap();
+            let (outcome, consumed) = count_untracked_lines(&mut file, &mut buf, true, cap);
+            assert_eq!(consumed, 8, "cap {cap} reads the whole 8-byte file");
+            assert_eq!(outcome.unwrap(), ReadOutcome::Counted { added: 4 });
+        }
+    }
+
+    /// The `check-attr -z` grammar this depends on: whole `path NUL attr NUL value
+    /// NUL` triples, one per REQUESTED attribute per path. A stream that does not
+    /// divide into triples is unreadable rather than empty, so the caller blanks the
+    /// untracked lane instead of verdicting half a file list.
+    #[test]
+    fn parses_check_attr_triples_and_refuses_a_malformed_stream() {
+        let none = std::collections::HashMap::new();
+        let no_filters = std::collections::HashSet::new();
+        let binary = PathAttrs {
+            diff: Some(DiffAttr::Binary),
+            converts: false,
+        };
+        let forced = PathAttrs {
+            diff: Some(DiffAttr::ForcedText),
+            converts: false,
+        };
+
+        let valid = "a.dat\0diff\0unset\0b.forced\0diff\0set\0c.txt\0diff\0unspecified\0";
+        let attrs = parse_path_attrs(valid, &none, &no_filters).expect("a whole-triple stream");
+        assert_eq!(attrs.get("a.dat"), Some(&binary));
+        assert_eq!(attrs.get("b.forced"), Some(&forced));
+        assert_eq!(attrs.get("c.txt"), None, "`unspecified` carries no verdict");
+        assert_eq!(attrs.len(), 2);
+
+        // A driver the repo configures resolves; an unconfigured one sniffs, since
+        // only running it would say what it decides.
+        let drivers = std::collections::HashMap::from([
+            ("binyes".to_string(), true),
+            ("binno".to_string(), false),
+        ]);
+        let resolved = parse_path_attrs(
+            "a.byes\0diff\0binyes\0b.bno\0diff\0binno\0c.png\0diff\0exif\0",
+            &drivers,
+            &no_filters,
+        )
+        .expect("a whole-triple stream");
+        assert_eq!(resolved.get("a.byes"), Some(&binary));
+        assert_eq!(resolved.get("b.bno"), Some(&forced));
+        assert_eq!(resolved.get("c.png"), None, "an unconfigured driver sniffs");
+        assert_eq!(
+            parse_path_attrs("d.png\0diff\0exif\0", &none, &no_filters),
+            Some(std::collections::HashMap::new()),
+            "no verdicts is a legitimate answer, not a failure"
+        );
+
+        // A stream that does not divide into triples is a probe FAILURE, not an empty
+        // answer: the caller blanks the lane rather than sniffing every path.
+        assert_eq!(
+            parse_path_attrs("a.dat\0diff\0", &none, &no_filters),
+            None,
+            "a partial triple is unreadable"
+        );
+        assert_eq!(
+            parse_path_attrs("", &none, &no_filters),
+            Some(std::collections::HashMap::new()),
+            "an empty stream is empty, not malformed"
+        );
+    }
+
+    /// All three requested attributes come back per path, so one path's triples are
+    /// folded into one verdict. A `working-tree-encoding` converts on any value, while
+    /// a `filter` converts only when it names a CONFIGURED driver — an unknown name, a
+    /// valueless `set`, an `unset` or an `unspecified` all leave the content alone.
+    #[test]
+    fn folds_multi_attribute_check_attr_rows_per_path() {
+        let none = std::collections::HashMap::new();
+        // `set` is in the set on purpose: check-attr's reserved answers must never
+        // reach the driver lookup, however a repo happens to name its drivers.
+        let filters = std::collections::HashSet::from(["fake".to_string(), "set".to_string()]);
+        let folded = parse_path_attrs(
+            "doc.u16\0diff\0unspecified\0doc.u16\0working-tree-encoding\0UTF-16\0\
+             doc.u16\0filter\0unspecified\0\
+             both.dat\0diff\0unset\0both.dat\0working-tree-encoding\0unspecified\0\
+             both.dat\0filter\0fake\0",
+            &none,
+            &filters,
+        )
+        .expect("a whole-triple stream");
+        assert_eq!(
+            folded.get("doc.u16"),
+            Some(&PathAttrs {
+                diff: None,
+                converts: true
+            }),
+            "an encoding alone converts without deciding text-or-binary"
+        );
+        assert_eq!(
+            folded.get("both.dat"),
+            Some(&PathAttrs {
+                diff: Some(DiffAttr::Binary),
+                converts: true
+            }),
+            "a path's triples fold into ONE verdict"
+        );
+        assert_eq!(folded.len(), 2);
+
+        let unresolved = parse_path_attrs(
+            "a.lfs\0filter\0set\0b.lfs\0filter\0ghost\0",
+            &none,
+            &filters,
+        )
+        .expect("a whole-triple stream");
+        assert!(
+            unresolved.is_empty(),
+            "a valueless filter names nothing and an unconfigured one runs nothing"
+        );
+
+        let inert = parse_path_attrs(
+            "b.txt\0filter\0unset\0b.txt\0working-tree-encoding\0unspecified\0",
+            &none,
+            &filters,
+        )
+        .expect("a whole-triple stream");
+        assert!(
+            inert.is_empty(),
+            "`-filter` and an unspecified encoding convert nothing"
+        );
+    }
+
+    /// The `--name-only` key stream that says which filter drivers the repo really
+    /// configures: either half of the pair counts and a dotted driver name survives
+    /// whole. A key the queried pattern could not have produced means the stream is not
+    /// what this asked for — a probe FAILURE, not an empty answer.
+    #[test]
+    fn parses_configured_filter_driver_names() {
+        let names = parse_configured_filters(
+            "filter.fake.clean\0filter.streamed.process\0filter.my.lfs.clean\0",
+        )
+        .expect("keys the queried pattern produces");
+        assert!(names.contains("fake"));
+        assert!(
+            names.contains("streamed"),
+            "`.process` configures a driver too"
+        );
+        assert!(
+            names.contains("my.lfs"),
+            "a dotted driver name is the whole middle"
+        );
+        assert_eq!(names.len(), 3);
+
+        for off_pattern in [
+            "filter.fake.smudge\0",
+            "filter.fake.required\0",
+            "core.autocrlf\0",
+        ] {
+            assert_eq!(
+                parse_configured_filters(off_pattern),
+                None,
+                "{off_pattern:?} is not a key this query can return"
             );
         }
+
+        // `[filter ""]` is legal config and canonicalizes to a key the query DOES
+        // return, so it is in-pattern: it names no driver and skips its own entry
+        // rather than condemning the stream.
+        assert_eq!(
+            parse_configured_filters("filter..clean\0"),
+            Some(std::collections::HashSet::new()),
+            "an empty subsection names no driver"
+        );
+        let beside = parse_configured_filters("filter..clean\0filter.real.clean\0")
+            .expect("an empty subsection is in-pattern");
+        assert_eq!(
+            beside,
+            std::collections::HashSet::from(["real".to_string()]),
+            "a real driver beside it still resolves"
+        );
+        assert_eq!(
+            parse_configured_filters(""),
+            Some(std::collections::HashSet::new()),
+            "no matches is an empty answer, not a failure"
+        );
+    }
+
+    /// The `git config -z --get-regexp` grammar: NUL between entries, a newline
+    /// between each key and its value, and NO newline at all for a valueless key.
+    /// The value alphabet is git's own, case-insensitive — a valueless key is true, an
+    /// empty value is false, and any integer goes by its zero-ness — and a dotted
+    /// driver name survives whole. A junk VALUE skips its own entry; a key outside the
+    /// queried pattern means the stream is unreadable, which is a probe FAILURE.
+    #[test]
+    fn parses_diff_driver_binary_config() {
+        let read = |text: &str| parse_diff_driver_binary(text).expect("keys the query produces");
+        // `1`/`0` sit in both the named alphabet and the integer rule; the two agree.
+        for spelling in [
+            "true", "yes", "on", "1", "TRUE", "Yes", "ON", "2", "-1", "1k",
+        ] {
+            let flags = read(&format!("diff.d.binary\n{spelling}\0"));
+            assert_eq!(flags.get("d"), Some(&true), "{spelling} reads as true");
+        }
+        for spelling in ["false", "no", "off", "0", "False", "NO", "Off", "0k", "0M"] {
+            let flags = read(&format!("diff.d.binary\n{spelling}\0"));
+            assert_eq!(flags.get("d"), Some(&false), "{spelling} reads as false");
+        }
+        for spelling in ["maybe", "1.5", "k", "1kk"] {
+            let flags = read(&format!("diff.d.binary\n{spelling}\0"));
+            assert!(flags.is_empty(), "{spelling} is not a bool git could read");
+        }
+        let valueless = read("diff.dvalueless.binary\0");
+        assert_eq!(
+            valueless.get("dvalueless"),
+            Some(&true),
+            "a key with no newline at all is git's valueless true"
+        );
+        let empty_value = read("diff.dempty.binary\n\0");
+        assert_eq!(
+            empty_value.get("dempty"),
+            Some(&false),
+            "an empty value is git's false"
+        );
+
+        let mixed =
+            read("diff.binyes.binary\nyes\0diff.binno.binary\nfalse\0diff.my.tool.binary\ntrue\0");
+        assert_eq!(mixed.get("binyes"), Some(&true));
+        assert_eq!(mixed.get("binno"), Some(&false));
+        assert_eq!(
+            mixed.get("my.tool"),
+            Some(&true),
+            "a dotted driver name is the whole middle"
+        );
+        assert_eq!(mixed.len(), 3);
+
+        let junk = read("diff.odd.binary\nmaybe\0diff.two.binary\n2\0");
+        assert_eq!(
+            junk.get("two"),
+            Some(&true),
+            "a non-zero integer is true beside an unreadable sibling"
+        );
+        assert_eq!(junk.get("odd"), None, "a non-bool value carries no verdict");
+        assert_eq!(junk.len(), 1);
+
+        assert_eq!(
+            parse_diff_driver_binary(""),
+            Some(std::collections::HashMap::new()),
+            "no matches is an empty answer, not a failure"
+        );
+        assert_eq!(
+            parse_diff_driver_binary("core.autocrlf\nfalse\0"),
+            None,
+            "a key this query cannot return means the stream is unreadable"
+        );
+
+        // `auto` is the key's third value (the key is a tristate): decide by content,
+        // which is the sniff. As a LATER match it clears what an earlier scope set; an
+        // earlier one is simply overwritten by the later verdict.
+        assert_eq!(
+            read("diff.dauto.binary\nauto\0").get("dauto"),
+            None,
+            "`auto` alone asks for the content decision"
+        );
+        assert_eq!(
+            read("diff.dover.binary\ntrue\0diff.dover.binary\nauto\0").get("dover"),
+            None,
+            "a later `auto` clears an earlier scope's verdict"
+        );
+        assert_eq!(
+            read("diff.dover.binary\nfalse\0diff.dover.binary\nauto\0").get("dover"),
+            None,
+            "it clears a `false` the same way"
+        );
+        assert_eq!(
+            read("diff.dover.binary\nauto\0diff.dover.binary\ntrue\0").get("dover"),
+            Some(&true),
+            "a later verdict still wins over an earlier `auto`"
+        );
+        assert_eq!(
+            read("diff.dcase.binary\nAUTO\0").get("dcase"),
+            None,
+            "the tristate spelling is case-insensitive like the bools"
+        );
+
+        // `[diff ""]` is legal config and in-pattern: it names no driver and skips its
+        // own entry, leaving the rest of the stream readable.
+        assert_eq!(
+            parse_diff_driver_binary("diff..binary\ntrue\0"),
+            Some(std::collections::HashMap::new()),
+            "an empty subsection names no driver"
+        );
+        let beside = read("diff..binary\ntrue\0diff.real.binary\ntrue\0");
+        assert_eq!(
+            beside,
+            std::collections::HashMap::from([("real".to_string(), true)]),
+            "a real driver beside it still resolves"
+        );
+    }
+
+    /// The read budget, spent in `ls-files` order (which git emits sorted). A file
+    /// too big for what is left is skipped ALONE — `b-oversized.txt` sits between
+    /// two small files and only it loses its entry — and the budget is charged for
+    /// bytes actually read, so `c-fits.txt` drives it to exactly zero and
+    /// `d-after.txt` gets nothing.
+    #[tokio::test]
+    async fn working_line_stats_spends_its_untracked_read_budget_in_order() {
+        let (_tmp, dir, repo) = init_line_stats_repo("gd-line-stats-budget-test-").await;
+
+        std::fs::write(dir.join("a-first.txt"), "x\n").unwrap();
+        std::fs::write(dir.join("b-oversized.txt"), "y\n".repeat(50)).unwrap();
+        std::fs::write(dir.join("c-fits.txt"), "p\nq\n").unwrap();
+        std::fs::write(dir.join("d-after.txt"), "r\n").unwrap();
+
+        let listed = run_git(
+            Some(&repo),
+            &["ls-files", "--others", "--exclude-standard", "-z"],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap()
+        .stdout_lossy();
+
+        // 6 bytes: a-first spends 2, b-oversized (100) cannot fit the remaining 4,
+        // c-fits spends the last 4, and d-after is never opened.
+        let entries = untracked_line_stats(
+            &repo,
+            &listed,
+            6,
+            BIG_FILE_BYTES_DEFAULT,
+            &Default::default(),
+        );
+        let by_path: Vec<_> = entries.iter().map(|e| (e.path.as_str(), e.added)).collect();
+        assert_eq!(by_path, vec![("a-first.txt", 1), ("c-fits.txt", 2)]);
+    }
+
+    /// The repo's own `core.bigFileThreshold` decides, not a hardcoded default: an
+    /// oversized UNSPECIFIED path reads `bin` like numstat's `-  -`, while a forced
+    /// `diff` attribute counts every line however big the file is. The small plain
+    /// file is the control that keeps the threshold from swallowing everything.
+    #[tokio::test]
+    async fn working_line_stats_honors_configured_big_file_threshold() {
+        let (_tmp, dir, repo) = init_line_stats_repo("gd-line-stats-threshold-test-").await;
+        run_git(
+            Some(&repo),
+            &["config", "core.bigFileThreshold", "1k"],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap();
+
+        std::fs::write(dir.join(".gitattributes"), "*.forced diff\n").unwrap();
+        run_git(Some(&repo), &["add", "-A"], DEFAULT_TIMEOUT)
+            .await
+            .unwrap();
+        run_git(
+            Some(&repo),
+            &["commit", "-qm", "attributes"],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap();
+
+        let big: String = (1..=200).map(|i| format!("line {i}\n")).collect();
+        assert!(
+            big.len() > 1024,
+            "the fixture must exceed the 1k threshold, got {}",
+            big.len()
+        );
+        std::fs::write(dir.join("big.txt"), &big).unwrap();
+        std::fs::write(dir.join("big.forced"), &big).unwrap();
+        std::fs::write(dir.join("small.txt"), "a\nb\n").unwrap();
+
+        let stats = git_working_line_stats(repo.clone()).await.unwrap();
+        let seen = |name: &str| {
+            let e = stats
+                .unstaged
+                .iter()
+                .find(|e| e.path == name)
+                .unwrap_or_else(|| panic!("{name} is counted"));
+            (e.added, e.deleted, e.is_binary)
+        };
+        assert_eq!(
+            seen("big.txt"),
+            (0, 0, true),
+            "the configured threshold governs an unspecified path"
+        );
+        assert_eq!(
+            seen("big.forced"),
+            (200, 0, false),
+            "a forced `diff` beats the threshold"
+        );
+        assert_eq!(seen("small.txt"), (2, 0, false));
+
+        assert_untracked_matches_staged(
+            &repo,
+            &stats.unstaged,
+            &["big.txt", "big.forced", "small.txt"],
+        )
+        .await;
+    }
+
+    /// A nested repo is a directory to `ls-files`, and the counter skips anything that
+    /// is not a regular file rather than descending into it — that row keeps the blank
+    /// slot it had before, whichever way git spells the name.
+    #[tokio::test]
+    async fn working_line_stats_skips_a_nested_repository() {
+        let (_tmp, dir, repo) = init_line_stats_repo("gd-line-stats-nested-repo-test-").await;
+
+        let nested = dir.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        run_git(
+            Some(&nested.to_string_lossy().into_owned()),
+            &["init", "-q"],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        std::fs::write(nested.join("inner.txt"), "a\nb\n").unwrap();
+        std::fs::write(dir.join("outer.txt"), "a\n").unwrap();
+
+        // Pinned so the assertion below can't pass because enumeration never named it:
+        // `ls-files` does report the nested repo, and the skip arm is what drops it.
+        let listed = run_git(
+            Some(&repo),
+            &["ls-files", "--others", "--exclude-standard", "-z"],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap()
+        .stdout_lossy();
+        assert!(
+            listed.split('\0').any(|p| p.starts_with("nested")),
+            "enumeration must name the nested repo, got {listed:?}"
+        );
+
+        let stats = git_working_line_stats(repo).await.unwrap();
+        assert!(
+            !stats.unstaged.iter().any(|e| e.path.starts_with("nested")),
+            "a nested repo is never counted, got {:?}",
+            stats.unstaged.iter().map(|e| &e.path).collect::<Vec<_>>()
+        );
+        assert!(
+            stats.unstaged.iter().any(|e| e.path == "outer.txt"),
+            "the control file beside it is still counted"
+        );
+    }
+
+    /// `--exclude-standard` keeps ignored files out of the count entirely: they
+    /// are not rows in the panel, so they must not be entries either.
+    #[tokio::test]
+    async fn working_line_stats_skips_ignored_files() {
+        let (_tmp, dir, repo) = init_line_stats_repo("gd-line-stats-ignored-test-").await;
+
+        std::fs::write(dir.join(".gitignore"), "ignored.txt\n").unwrap();
+        run_git(Some(&repo), &["add", "-A"], DEFAULT_TIMEOUT)
+            .await
+            .unwrap();
+        run_git(
+            Some(&repo),
+            &["commit", "-qm", "ignore rules"],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        std::fs::write(dir.join("ignored.txt"), "one\ntwo\n").unwrap();
+        std::fs::write(dir.join("seen.txt"), "one\n").unwrap();
+
+        let stats = git_working_line_stats(repo).await.unwrap();
+        assert!(
+            !stats.unstaged.iter().any(|e| e.path == "ignored.txt"),
+            "an ignored file is never an untracked row"
+        );
+        assert!(
+            stats.unstaged.iter().any(|e| e.path == "seen.txt"),
+            "the control file is still counted"
+        );
     }
 
     /// A brand-new repo with no commits still reports its staged counts — `git
