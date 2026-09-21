@@ -1139,6 +1139,15 @@ jobs, with the same **inline log peek**; **Bitbucket PRs** get it from the PR's
 commit build statuses, but those **link out only** (name, state, and URL —
 Bitbucket exposes no fetchable job logs).
 
+A red build restarts from the rollup itself: a button beside the summary line. On
+**GitHub** it reads **Re-run failed jobs**, appears once a run behind a failing
+check has finished, and restarts the failed jobs of every such run; on **GitLab**
+it reads **Retry pipeline**, appears as soon as a job fails, and retries the
+pipeline's failed and canceled jobs. The command palette carries it as **Re-run
+failed jobs / Retry pipeline**, palette-only by default — bind a key in Settings.
+If your sign-in can't push, the button stays visible and disabled with the reason.
+**Bitbucket** has no pull-request-scoped re-run, so no button appears there.
+
 Comments, replies, edits, and descriptions use a Markdown editor with **Write / Preview**
 tabs and a formatting toolbar (bold, italic, headings, quote, code, links, and bulleted
 / numbered / task lists, with {{key:mod+b}} / {{key:mod+i}} / {{key:mod+k}}); press
@@ -2186,7 +2195,9 @@ Actions workflow runs (needs \`gh\` + a GitHub remote). **GitLab pipelines** sho
   pages remain. Filter by text or scope to the current branch.
 - Click a run to see its **jobs and steps** with status and durations — a job or step
   that's still running counts its elapsed time up live.
-- **Re-run all jobs**, **Re-run failed jobs**, or **Cancel** an in-progress run.
+- **Re-run all jobs**, **Re-run failed jobs**, or **Cancel** an in-progress run. A pull
+  request's checks rollup carries its own re-run as well (failed jobs on GitHub, the
+  pipeline retry on GitLab), so a red build restarts without a trip here.
 - {{Secondaryclick}} a run in the list for its actions without leaving the list — the
   run is selected, so the detail pane follows. You get the same **re-run** and **cancel**
   offers, **Run workflow again…** (the Run dialog opens with that run's workflow already

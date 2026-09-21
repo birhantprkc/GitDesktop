@@ -2737,6 +2737,7 @@ export function RemotePrView({
           provider={providerKey}
           crossRepository={!!pr.crossRepository}
           unmetRequiredContexts={blockedRequirements}
+          stale={detailsStale || !isSelectedPr}
         />
         <div className="flex flex-wrap gap-1 pt-1">
           {availableSections.map((s) => (
