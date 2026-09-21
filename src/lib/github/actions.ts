@@ -42,6 +42,10 @@ export interface RunStep {
 }
 
 export interface RunJob {
+  /** Forge job id. u64 upstream, carried here as a JS number: measured
+   *  magnitudes are ~1e11 (GitHub) and ~1.7e10 (GitLab) against the 2^53 safe
+   *  ceiling, and the IPC boundary re-stringifies. Retyping ids as strings
+   *  end-to-end is a recorded repo-wide follow-up, not a per-call-site patch. */
   id: number;
   name: string;
   status: string;
@@ -185,6 +189,17 @@ export const forgeJobLogs = (
   job.logRef
     ? forgeBbStepLogs(repoPath, job.logRef)
     : forgeCiJobLogs(repoPath, job.id);
+
+/** Re-run ONE finished job: GitHub restarts it plus every job that depends on
+ *  it, GitLab retries it alone. Ids stay strings over IPC — they can exceed JS's
+ *  safe-integer range. `lens` is GitHub-only (fork identity) and picks which
+ *  repository the re-run targets; callers on a repo-wide CI surface omit it. */
+export const forgeCiJobRerun = (
+  repoPath: string,
+  jobId: number | string,
+  lens?: RemoteLens,
+) =>
+  invoke<void>("forge_ci_job_rerun", { repoPath, jobId: String(jobId), lens });
 
 /** Play (start) a manual GitLab CI job awaiting a manual trigger — GitLab-only,
  *  gated on `implemented.ciJobPlay`; errors on other providers. */
@@ -442,6 +457,17 @@ export function useRerunRun(repo: string) {
 export function useCancelRun(repo: string) {
   return useActionsMutation(repo, (runId: number) =>
     forgeCiRunCancel(repo, runId),
+  );
+}
+
+/** Re-run one finished job (GitHub + GitLab). Invalidating the Actions subtree
+ *  refreshes the run detail + list; the run goes active and the existing 5s poll
+ *  takes over. */
+export function useRerunJob(repo: string) {
+  return useActionsMutation(
+    repo,
+    (args: { jobId: number | string; lens?: RemoteLens }) =>
+      forgeCiJobRerun(repo, args.jobId, args.lens),
   );
 }
 

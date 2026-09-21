@@ -372,7 +372,11 @@ in one click.
   (name/state/URL, no fetchable logs). A failing rollup offers the re-run
   right on its summary line — **Re-run failed jobs** on GitHub, **Retry
   pipeline** on GitLab, and **Re-run failed jobs / Retry pipeline** in the
-  command palette (Bitbucket has no pull-request-scoped re-run).
+  command palette (Bitbucket has no pull-request-scoped re-run). Each
+  failed row with a fetchable job re-runs on its own too: **Re-run** on
+  GitHub (offered once the job's run has finished) restarts that job
+  plus any jobs that depend on it, and **Retry** on GitLab (offered as
+  soon as the job fails) retries just that job.
 - **Line-anchored review comments**, from Copilot, CodeRabbit, or humans:
   rendered grouped by file in the Conversation and at their exact line in
   the Files diff, with reply-in-thread, resolve/unresolve, and edit/delete
@@ -620,15 +624,15 @@ with a comment you've drafted posted alongside.
 
 ### GitHub Actions
 
-A dedicated tab with live run status, run detail, re-run (all or failed),
-cancel, manual dispatch, and inline failed-step logs (none of which GitHub
-Desktop does), plus a current-branch CI badge in the header and
-run-completion notifications. Right-click any run in the list to re-run or
-cancel it, run its workflow again with the picker already on that workflow,
-open it on the forge, or copy its link; those actions are in the command
-palette too. The Run workflow picker marks the workflows that can't be
-started by hand on the chosen ref, so a dispatch that would be rejected is
-visible before you run it.
+A dedicated tab with live run status, run detail, re-run (all, failed
+only, or one job), cancel, manual dispatch, and inline failed-step logs
+(none of which GitHub Desktop does), plus a current-branch CI badge in
+the header and run-completion notifications. Right-click any run in the
+list to re-run or cancel it, run its workflow again with the picker
+already on that workflow, open it on the forge, or copy its link; those
+actions are in the command palette too. The Run workflow picker marks
+the workflows that can't be started by hand on the chosen ref, so a
+dispatch that would be rejected is visible before you run it.
 
 - **Debug failed CI with AI**: turn a failed job's logs into a streamed
   root-cause + fix, ending with a ready-to-paste prompt for a coding agent.

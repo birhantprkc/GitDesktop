@@ -29,6 +29,7 @@ import { Spinner } from "@/components/ui/spinner";
 import {
   checksRerunOffer,
   isPipelineProvider,
+  jobRerunOffer,
   RERUN_TITLES,
   rerunSuccessMessage,
   StatusIcon,
@@ -47,6 +48,7 @@ import {
   isRunActive,
   type RunJob,
   useJobLogs,
+  useRerunJob,
   useRerunRun,
   useRunDetail,
   useRunFailedLogs,
@@ -59,7 +61,13 @@ import { formatDurationBetween } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { checkPresentation, isOutstanding } from "./check-presentation";
-import { rerunnableRuns } from "./checks-rerun";
+import {
+  failedRunSignatures,
+  type JobRerunCandidate,
+  rerunnableJobs,
+  rerunnableRuns,
+  stillLatchedRunIds,
+} from "./checks-rerun";
 import { PR_SWITCH_LOADING_REASON } from "./PrMergeabilityBanner";
 
 /** The one wording for releasing a held workflow run — this strip and the Actions
@@ -271,6 +279,11 @@ function CheckRow({
   runJob,
   isRunning,
   requiredAttention,
+  jobRerun,
+  jobRerunBusy,
+  jobRerunDisabled,
+  jobRerunReason,
+  onJobRerun,
 }: {
   repoPath: string;
   check: PrCheckOut;
@@ -289,6 +302,23 @@ function CheckRow({
    *  earns a "required" word beside the name. The status presentation stays as it
    *  is: the run really was cancelled, and only the requirement is extra. */
   requiredAttention: boolean;
+  /** The per-job re-run this row offers, already worded by the provider, or null
+   *  when the parent's derivation didn't make this row a candidate. */
+  jobRerun: {
+    compactLabel: string;
+    title: string;
+    ariaLabel: string;
+  } | null;
+  /** Whether the re-run mutation is in flight for THIS row's job. */
+  jobRerunBusy: boolean;
+  /** Whether anything outside this row holds the button: a read-only viewer, a
+   *  write probe still answering, or another row's re-run in flight (the handler
+   *  serializes, so an enabled-looking sibling would click into a no-op). */
+  jobRerunDisabled: boolean;
+  jobRerunReason: string | undefined;
+  /** Takes the button element: the parent reads whether it held focus before its
+   *  first await, so it can hand focus on only when the click would lose it. */
+  onJobRerun?: (buttonEl: HTMLElement) => void;
 }) {
   const { tone, Icon, label } = checkPresentation(check.status, provider);
   // The live counter is gated on `isRunning`, never on `check.completedAt`: that
@@ -397,6 +427,31 @@ function CheckRow({
           >
             {inner}
           </div>
+        )}
+        {jobRerun && (
+          // A trailing sibling of the row button, like "Open full run": always
+          // visible, Tab-reachable, and deliberately without `data-row` so the
+          // arrow-key nav keeps stepping row to row.
+          <DisabledReasonButton
+            variant="ghost"
+            size="xs"
+            wrapperClassName="mr-2"
+            className="text-muted-foreground"
+            disabled={jobRerunBusy || jobRerunDisabled}
+            reason={jobRerunReason}
+            title={jobRerun.title}
+            // The accessible name adds the check to the visible label and keeps
+            // that label inside it (WCAG 2.5.3).
+            aria-label={jobRerun.ariaLabel}
+            onClick={(e) => onJobRerun?.(e.currentTarget)}
+          >
+            {jobRerunBusy ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <ArrowClockwiseIcon data-icon="inline-start" />
+            )}
+            {jobRerun.compactLabel}
+          </DisabledReasonButton>
         )}
         {isActionsCheck && check.detailsUrl && (
           <button
@@ -551,8 +606,15 @@ export function ChecksRollup({
     }
   }, [attention]);
 
+  // The one bucket classifier this component derives from — the re-run offers,
+  // the per-job offers, and the run-latch signature all read it, so no consumer
+  // can classify a check differently from another.
+  const bucketOf = (c: PrCheckOut) =>
+    checkPresentation(c.status, provider).bucket;
+
   const approveRun = useApproveWorkflowRun(repoPath);
   const rerun = useRerunRun(repoPath);
+  const rerunJobMutation = useRerunJob(repoPath);
   // Own busy state: each batch spans several sequential mutations, so the
   // mutations' own `isPending` would flicker between them.
   const [approving, setApproving] = useState(false);
@@ -565,19 +627,33 @@ export function ChecksRollup({
   const [recentlyRerun, setRecentlyRerun] = useState<
     ReadonlyMap<string, string>
   >(new Map());
+  // The same latch one job down: job id → the completion it carried when it was
+  // re-run. Both forges mint a NEW job id per attempt, so an entry here simply
+  // orphans once the re-run lands, and dies with the per-PR remount.
+  const [recentlyRerunJobs, setRecentlyRerunJobs] = useState<
+    ReadonlyMap<string, string>
+  >(new Map());
+  // Which job is mid-re-run, so only ITS row shows a spinner — a shared boolean
+  // would dim every offer on the list.
+  const [rerunningJob, setRerunningJob] = useState<string | null>(null);
   // The re-run button unmounts the moment its offer retires, so a keyboard batch
   // started there hands focus to the summary disclosure — stable for as long as
   // any check renders. A refetch returning NO checks leaves only the headless
   // watchers, so focus still falls to `<body>`; the repair pass bounds that.
   const rerunButtonRef = useRef<HTMLButtonElement>(null);
   const summaryRef = useRef<HTMLButtonElement>(null);
-  // The pending repair pass — the ref exists only to keep one timer per batch.
+  // The pending repair pass — the ref exists only to keep ONE timer, shared by
+  // every re-run path.
   // It deliberately outlives this component: an Activity tab hide runs effect
   // cleanups, so cancelling there would drop the repair whenever the user
   // switches tabs inside the window, and the invalidation is global and
   // idempotent whether or not the rollup is still mounted.
   const queryClient = useQueryClient();
   const repairTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The run ids that pass owes an invalidation. It ACCUMULATES rather than
+  // replaces: a second re-run inside the window re-arms the shared timer, and
+  // without the set the first batch's per-run invalidations would be dropped.
+  const repairRunIds = useRef(new Set<string>());
   // PR details refetch on focus only, and the polled run detail below is the one
   // place the rollup learns a run finished before the PR cache does — so a run
   // whose jobs have all settled refreshes the checks once. Keyed on the settled
@@ -636,6 +712,10 @@ export function ChecksRollup({
     rerunProvider !== undefined &&
     (!isPipelineProvider(rerunProvider) ||
       forgeFeatureReady(forge.data, "ciRerun"));
+  const canRerunJob =
+    rerunProvider !== undefined &&
+    (!isPipelineProvider(rerunProvider) ||
+      forgeFeatureReady(forge.data, "ciJobRerun"));
 
   // The distinct run ids of the still-running GitHub Actions checks — what the
   // GitHub re-run arm subtracts, GitHub refusing a run still in progress. Not
@@ -677,11 +757,37 @@ export function ChecksRollup({
   // lives in its own pure module so the rules can be pinned by test.
   const rerunnable = rerunnableRuns({
     checks,
-    bucketOf: (c) => checkPresentation(c.status, provider).bucket,
+    bucketOf,
     runningRunIds,
     latched: recentlyRerun,
     provider: rerunProvider,
   });
+  // The runs this rollup re-ran whose latch still STANDS — never the latch
+  // KEYS, which persist for the mount and would suppress a second failed
+  // attempt forever. The per-job arm subtracts these on every provider: a
+  // batch re-run resubmitted every failed job of the run, so re-offering one
+  // would duplicate work already started. A single-job start latches its run
+  // too, so the run's other failed jobs go quiet with it — they return on the
+  // next snapshot, which is cheaper than tracking which sibling was spared.
+  const latchedBusyRuns = stillLatchedRunIds(checks, bucketOf, recentlyRerun);
+  // …and the same chain one job down. Visibility never waits on the write
+  // probe: that probe is armed FROM this list and only contributes the disabled
+  // state + its reason.
+  const jobCandidates =
+    canRerunJob && !stale
+      ? rerunnableJobs({
+          checks,
+          bucketOf,
+          runningRunIds,
+          stillLatchedRunIds: latchedBusyRuns,
+          latchedJobs: recentlyRerunJobs,
+          provider: rerunProvider,
+        })
+      : [];
+  // The provider's per-job wording. Non-null whenever a candidate exists (the
+  // derivation gates on the same settled providers), so the rows never spell it.
+  const jobOffer = jobRerunOffer(rerunProvider);
+  const jobCandidateById = new Map(jobCandidates.map((c) => [c[0], c]));
   // The one offer this rollup makes, or null when any gate closes — the button
   // and the palette action both read it, so no gate can hold for one and not the
   // other.
@@ -698,7 +804,7 @@ export function ChecksRollup({
   const writeAccess = useRepoWriteAccess(
     repoPath,
     lens,
-    blockedRunIds.length > 0 || rerunOffer !== null,
+    blockedRunIds.length > 0 || rerunOffer !== null || jobCandidates.length > 0,
   );
   const writeReason = writeAccessReason(writeAccess.data);
   const writeBlocked = writeAccess.data?.canPush === false;
@@ -706,6 +812,56 @@ export function ChecksRollup({
   // switch lands, while the transient wording doesn't.
   const heldReason =
     writeReason ?? (stale ? PR_SWITCH_LOADING_REASON : undefined);
+  // ONE busy notion for both re-run paths — the failed-checks batch and any
+  // single job. They act on the same runs, so an overlapping submission just
+  // buys the forge's mid-run refusal; every control holds while either runs.
+  const rerunBusy = rerunning || rerunningJob !== null;
+  // What holds EVERY re-run control, decided once. Each control suppresses the
+  // reason on ITSELF while it's the one running — its spinner already says so,
+  // and "already in flight" would read as a lie there.
+  const rerunHeld = rerunBusy || writeBlocked || writeAccess.isPending;
+  const rerunHeldReason = (() => {
+    switch (true) {
+      case writeReason !== undefined:
+        return writeReason;
+      case writeAccess.isPending:
+        return "Checking write access…";
+      case rerunBusy:
+        return "A re-run is already in flight…";
+      default:
+        return undefined;
+    }
+  })();
+
+  /** Re-read the PR's checks once the started attempts have transitioned. Both
+   *  re-run paths schedule through here, and the ids union across calls so a
+   *  second click inside the window can't drop the first's per-run pass. */
+  function scheduleChecksRepair(runIds: string[]) {
+    for (const id of runIds) repairRunIds.current.add(id);
+    if (repairTimer.current !== null) clearTimeout(repairTimer.current);
+    repairTimer.current = setTimeout(() => {
+      repairTimer.current = null;
+      const ids = [...repairRunIds.current];
+      repairRunIds.current.clear();
+      // The same two keys the mutation invalidates, re-read once the attempt
+      // transition has settled; unawaited, like the mutation's own pass.
+      void queryClient.invalidateQueries({
+        queryKey: ["repo", repoPath, "pr"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["repo", repoPath, "pr-ci"],
+      });
+      // Each re-run run's own detail query too: a watcher that never unmounts (a
+      // manual-gated GitLab pipeline stays pending) holds a completed-status
+      // cache with its interval off, and only an invalidation wakes it. A no-op
+      // for unmounted queries.
+      for (const id of ids) {
+        void queryClient.invalidateQueries({
+          queryKey: ["repo", repoPath, "actions", "run", id],
+        });
+      }
+    }, CHECKS_REPAIR_DELAY_MS);
+  }
 
   async function approveBlockedRuns() {
     if (writeBlocked || stale) return;
@@ -728,7 +884,7 @@ export function ChecksRollup({
   }
 
   async function rerunFailedChecks() {
-    if (writeBlocked || stale || rerunning) return;
+    if (writeBlocked || stale || rerunBusy) return;
     // Read before the first await: the button may be gone by the end of the
     // batch, and `activeElement` then reads `<body>` for a palette run and a
     // button run alike.
@@ -751,27 +907,7 @@ export function ChecksRollup({
       }
       if (startedIds.length > 0) {
         toast.success(rerunSuccessMessage(rerunProvider, true));
-        if (repairTimer.current !== null) clearTimeout(repairTimer.current);
-        repairTimer.current = setTimeout(() => {
-          repairTimer.current = null;
-          // The same two keys the mutation invalidates, re-read once the attempt
-          // transition has settled; unawaited, like the mutation's own pass.
-          void queryClient.invalidateQueries({
-            queryKey: ["repo", repoPath, "pr"],
-          });
-          void queryClient.invalidateQueries({
-            queryKey: ["repo", repoPath, "pr-ci"],
-          });
-          // Each re-run run's own detail query too: a watcher that never
-          // unmounts (a manual-gated GitLab pipeline stays pending) holds a
-          // completed-status cache with its interval off, and only an
-          // invalidation wakes it. A no-op for unmounted queries.
-          for (const id of startedIds) {
-            void queryClient.invalidateQueries({
-              queryKey: ["repo", repoPath, "actions", "run", id],
-            });
-          }
-        }, CHECKS_REPAIR_DELAY_MS);
+        scheduleChecksRepair(startedIds);
       }
     } finally {
       setRerunning(false);
@@ -787,6 +923,48 @@ export function ChecksRollup({
       summaryRef.current?.focus();
   }
 
+  async function rerunOneJob(
+    [jobId, completedAt, runId]: JobRerunCandidate,
+    buttonEl: HTMLElement,
+  ) {
+    if (writeBlocked || stale || rerunBusy || writeAccess.isPending) return;
+    if (!jobOffer) return;
+    // Read before the first await: this row is keyed by its job id, and a new
+    // attempt mints a new one, so the button can be gone by the time the
+    // mutation settles — `activeElement` then reads `<body>`.
+    const fromButton = document.activeElement === buttonEl;
+    setRerunningJob(jobId);
+    try {
+      await rerunJobMutation.mutateAsync({ jobId, lens });
+      toast.success(jobOffer.toast);
+      setRecentlyRerunJobs((prev) => new Map(prev).set(jobId, completedAt));
+      // Latch the RUN too, at the signature its failed checks carry right now:
+      // the header's run-level offer retires in the same render rather than
+      // firing a second time into GitHub's mid-run refusal, and the run's
+      // completion watcher mounts (mountedWatchIds reads these keys whether the
+      // rollup is open or collapsed). On GitLab it also parks both the
+      // pipeline-level Retry and the per-job Retry of the run's OTHER failed
+      // jobs until the next snapshot moves the signature — self-releasing, and
+      // accepted.
+      const signature = failedRunSignatures(checks, bucketOf).get(runId);
+      if (signature !== undefined)
+        setRecentlyRerun((prev) => new Map(prev).set(runId, signature));
+      scheduleChecksRepair([runId]);
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setRerunningJob(null);
+    }
+    // Hand focus to the summary — the same stable, keyless target the batch
+    // handler uses — and only while focus is still unclaimed: restore what the
+    // activation would otherwise lose, never override a move the user made
+    // during the await.
+    const unclaimed =
+      document.activeElement === document.body ||
+      document.activeElement === buttonEl;
+    if (fromButton && unclaimed) summaryRef.current?.focus();
+  }
+
   // The write probe only starts once the offer renders, so its first render has
   // no verdict yet — hold both entry points until it answers rather than let a
   // read-only viewer buy an API rejection.
@@ -796,7 +974,7 @@ export function ChecksRollup({
     rerunOffer !== null &&
       !writeBlocked &&
       !writeAccess.isPending &&
-      !rerunning,
+      !rerunBusy,
   );
 
   // Failures first, then the required contexts still holding the merge, then
@@ -950,11 +1128,8 @@ export function ChecksRollup({
                 ref={rerunButtonRef}
                 variant="outline"
                 size="xs"
-                disabled={rerunning || writeBlocked || writeAccess.isPending}
-                reason={
-                  writeReason ??
-                  (writeAccess.isPending ? "Checking write access…" : undefined)
-                }
+                disabled={rerunHeld}
+                reason={rerunning ? undefined : rerunHeldReason}
                 title={RERUN_TITLES[rerunOffer.kind]}
                 onClick={() => void rerunFailedChecks()}
               >
@@ -983,6 +1158,9 @@ export function ChecksRollup({
                 // once it reports a non-active status, drop the live UI immediately.
                 const jobDone = runJob ? !isRunActive(runJob.status) : false;
                 const live = running && !jobDone;
+                const candidate = c.jobId
+                  ? jobCandidateById.get(c.jobId)
+                  : undefined;
                 return (
                   <CheckRow
                     key={orderKey.get(c)}
@@ -993,6 +1171,25 @@ export function ChecksRollup({
                     isRunning={live}
                     runJob={runJob}
                     requiredAttention={attentionFlags.get(c) ?? false}
+                    jobRerun={
+                      candidate && jobOffer
+                        ? {
+                            compactLabel: jobOffer.compactLabel,
+                            title: jobOffer.title,
+                            ariaLabel: `${jobOffer.label} ${c.name}`,
+                          }
+                        : null
+                    }
+                    jobRerunBusy={rerunningJob === c.jobId}
+                    jobRerunDisabled={rerunHeld}
+                    jobRerunReason={
+                      rerunningJob === c.jobId ? undefined : rerunHeldReason
+                    }
+                    onJobRerun={
+                      candidate
+                        ? (buttonEl) => void rerunOneJob(candidate, buttonEl)
+                        : undefined
+                    }
                   />
                 );
               })}
