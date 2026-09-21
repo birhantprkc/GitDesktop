@@ -2454,10 +2454,11 @@ export function RemotePrView({
       </Fragment>,
     );
   }
-  // GitHub Projects membership (GitHub-only). Unlike labels/assignees it has no
-  // read-only fallback: its chips come from their own query rather than from
-  // `pr`, so a closed PR would pay a fetch to show them.
-  if (isOpen && providerKey === "github") {
+  // GitHub Projects membership. Unlike labels/assignees there is no read-only
+  // fallback: the picker is the whole field, on any PR state — closed and merged
+  // PRs deliberately keep it (boards hold closed items in their Done columns, as
+  // the issue side's rows do). `canWrite` is provider availability, not permission.
+  if (canWrite) {
     metaCells.push(
       <ProjectsPopover
         key={`projects-${entityKey}`}
@@ -2469,6 +2470,9 @@ export function RemotePrView({
         contentId={pr.id}
         lens={lens}
         disabledReason={pickerReason}
+        // The provider term of the palette gate is this branch's `canWrite`; the
+        // trigger's own hold is the rest, and each component derives that itself.
+        paletteEnabled={isSelectedPr}
       />,
     );
     // Field values under the picker, on the same gate: they come from the same
@@ -2484,6 +2488,7 @@ export function RemotePrView({
         number={number}
         lens={lens}
         disabledReason={pickerReason}
+        paletteEnabled={isSelectedPr}
       />,
     );
   }

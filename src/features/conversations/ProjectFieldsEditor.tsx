@@ -26,17 +26,19 @@ import type {
   ProjectIterationDef,
   RemoteLens,
 } from "@/lib/git/types";
+import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useUiStore } from "@/lib/stores/ui";
 import { cn } from "@/lib/utils";
 import { DATE_ONLY, IterationRange, OptionValue } from "./ProjectFieldValues";
-import { projectScopeReadOnly, ScopeGapBlock } from "./ProjectsPopover";
+import {
+  NO_ACCESS_REASON,
+  projectScopeReadOnly,
+  ScopeGapBlock,
+} from "./ProjectsPopover";
 
 const READ_ONLY_SCOPE_REASON =
   "Your GitHub sign-in can read project fields but not change them (needs the project scope)";
-/** Mirrors the Projects picker's own row wording verbatim — the two surfaces gate on
- *  the same `viewerCanUpdate` flag and must not say it differently. */
-const NO_ACCESS_REASON = "You don't have write access to this project";
 const NO_ITERATIONS_REASON =
   "This board's iteration field has no iterations to pick from yet";
 const ISSUE_FIELD_REASON =
@@ -59,7 +61,9 @@ function isWritable(def: ProjectFieldDef): def is WritableFieldDef {
   return def.kind !== "system";
 }
 
-/** Why a whole board's rows are held, or `undefined` when they're editable. */
+/** Why a whole board's rows are held, or `undefined` when they're editable. The
+ *  no-access wording is the Projects picker's own: both surfaces gate on the same
+ *  `viewerCanUpdate` flag and must not say it differently. */
 function boardLockedReason(
   readOnlyScope: boolean,
   board: ItemProjectFieldValues,
@@ -251,6 +255,7 @@ export function ProjectFieldsEditor({
   boards,
   disabledReason,
   unsettledReason,
+  paletteEnabled = false,
 }: {
   repoPath: string;
   /** Which surface this item is — the backend addresses issues and PRs apart. */
@@ -266,6 +271,9 @@ export function ProjectFieldsEditor({
   disabledReason?: string;
   /** Set when `boards` can't be trusted yet, with the words that say so. */
   unsettledReason?: string;
+  /** Whether the host surface owns the current selection, so this instance may
+   *  answer the palette's "Edit project fields…". */
+  paletteEnabled?: boolean;
 }) {
   const host = useActiveGhHost();
   const scopes = useGhScopes(host);
@@ -365,6 +373,18 @@ export function ProjectFieldsEditor({
     void commit();
   }
 
+  // Registered HERE, not in the parent views: the action's enabled state IS the
+  // trigger's hold, one derivation. This component only mounts once the item has
+  // boards, so a boardless item registers nothing rather than offering a no-op.
+  useHotkeyAction(
+    "edit-project-fields",
+    () => {
+      if (open || heldReason !== undefined) return;
+      handleOpenChange(true);
+    },
+    paletteEnabled && heldReason === undefined,
+  );
+
   const showTitles = boards.length > 1;
   return (
     <Popover.Root open={open} onOpenChange={handleOpenChange}>
@@ -395,10 +415,8 @@ export function ProjectFieldsEditor({
           className="isolate z-50"
         >
           <Popover.Popup className="w-80 rounded-none bg-popover p-2 text-popover-foreground shadow-md ring-1 ring-foreground/10">
-            {/* The caption IS the popup's accessible name: Popover.Popup takes its
-                `aria-labelledby` from whatever Title registers, and a bare element
-                leaves the dialog unnamed. `render` keeps the <p> it has always been
-                — Title's own default element is an <h2>. */}
+            {/* Title names the popup via aria-labelledby — a bare caption leaves the
+                dialog unnamed; render keeps the <p> off Title's default <h2>. */}
             <Popover.Title
               render={<p />}
               className="px-1 pb-1.5 text-xs font-medium"
