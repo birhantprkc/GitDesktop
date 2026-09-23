@@ -359,6 +359,31 @@ pub(crate) fn parse_auth_accounts(report: &str) -> Vec<ParsedAccount> {
     accounts
 }
 
+// Failures that can leave a created repository behind need the hedge; failures
+// that cannot must retain their original kind.
+fn gh_publish_create_error(name: &str, error: AppError) -> AppError {
+    match error {
+        AppError::Gh(message) => AppError::Gh(format!(
+            "{message}\nThe GitHub repository {name} may have been created before publishing failed. \
+             Check your repositories on GitHub before retrying."
+        )),
+        AppError::Timeout(seconds) => AppError::Gh(format!(
+            "GitHub CLI timed out after {seconds}s.\nThe GitHub repository {name} may have been created before publishing failed. \
+             Check your repositories on GitHub before retrying."
+        )),
+        other => other,
+    }
+}
+
+// Create and push succeeded, so every variant becomes Gh to lead with that fact;
+// unit variants cannot carry it. The kind change affects only the label, while
+// the original error's Display retains its information below the headline.
+fn gh_publish_url_error(name: &str, error: AppError) -> AppError {
+    AppError::Gh(format!(
+        "The GitHub repository {name} was created and pushed, but its URL could not be read back.\n{error}"
+    ))
+}
+
 /// Creates a GitHub repository from the local one, wires up `origin`, and
 /// pushes the current branch — GitHub Desktop's "Publish repository". `name`
 /// may be `repo` (under your account) or `owner/repo` (under an org).
@@ -390,7 +415,9 @@ pub async fn gh_publish_repo(
         args.push("--homepage");
         args.push(homepage);
     }
-    run_gh(Some(&repo_path), &args, GH_NETWORK_TIMEOUT).await?;
+    run_gh(Some(&repo_path), &args, GH_NETWORK_TIMEOUT)
+        .await
+        .map_err(|e| gh_publish_create_error(name, e))?;
 
     // `gh repo create` can't set topics — apply them with a follow-up edit on origin.
     // Best-effort: the repo + push already landed, so a topic failure can't fail it.
@@ -410,7 +437,9 @@ pub async fn gh_publish_repo(
 
     // gh's create output is human-prose on stderr; read back the canonical URL.
     // Origin: this is the repo just published, never an upstream.
-    gh_repo_url(repo_path, None).await
+    gh_repo_url(repo_path, None)
+        .await
+        .map_err(|e| gh_publish_url_error(name, e))
 }
 
 /// Owners the viewer can publish a new repository under: their own account plus
@@ -6244,6 +6273,55 @@ mod tests {
     };
     use crate::error::AppError;
     use crate::git::runner::{run_git, DEFAULT_TIMEOUT};
+
+    #[test]
+    fn publish_url_failure_leads_with_created_and_pushed_fact() {
+        let message = super::gh_publish_url_error(
+            "alice/demo",
+            crate::error::AppError::Gh("HTTP 503\nupstream unavailable".into()),
+        )
+        .to_string();
+        let first = message.lines().next().unwrap();
+        assert!(first.contains("alice/demo was created and pushed"), "{first}");
+        assert!(!first.contains("may have"), "{first}");
+        assert!(message.ends_with("HTTP 503\nupstream unavailable"));
+    }
+
+    #[test]
+    fn publish_create_failure_preserves_gh_not_found() {
+        assert!(matches!(
+            super::gh_publish_create_error("alice/demo", AppError::GhNotFound),
+            AppError::GhNotFound,
+        ));
+    }
+
+    #[test]
+    fn publish_create_timeout_keeps_timeout_first_and_appends_hedge() {
+        let error = super::gh_publish_create_error("alice/demo", AppError::Timeout(120));
+        let AppError::Gh(message) = error else {
+            panic!("a publish timeout must carry partial-publish guidance");
+        };
+        assert_eq!(message.lines().next(), Some("GitHub CLI timed out after 120s."));
+        let hedge = message.lines().last().unwrap();
+        assert!(hedge.contains("alice/demo may have been created"), "{hedge}");
+        assert!(hedge.contains("Check your repositories on GitHub before retrying"));
+        assert!(!message.contains("was created"), "{message}");
+    }
+
+    #[test]
+    fn publish_create_failure_keeps_gh_reason_first_and_appends_hedge() {
+        let reason = "name already exists\nGraphQL: Name has already been taken";
+        let error = super::gh_publish_create_error("alice/demo", AppError::Gh(reason.into()));
+        let AppError::Gh(message) = error else {
+            panic!("a gh failure must retain its variant");
+        };
+        assert_eq!(message.lines().next(), Some("name already exists"));
+        assert!(message.starts_with(&format!("{reason}\n")));
+        let hedge = message.lines().last().unwrap();
+        assert!(hedge.contains("alice/demo may have been created"), "{hedge}");
+        assert!(hedge.contains("Check your repositories on GitHub before retrying"));
+        assert!(!message.contains("was created"), "{message}");
+    }
 
     /// The three blobs `gh pr merge` writes to stderr when it refuses, assembled from
     /// cli/cli `pkg/cmd/pr/merge/merge.go` — `canMerge` writes the `is not mergeable`

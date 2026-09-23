@@ -6285,6 +6285,17 @@ pub async fn cli_ready() -> bool {
     }
 }
 
+// A create timeout can leave a project behind; other failures retain their kind.
+fn gl_publish_create_error(name: &str, error: AppError) -> AppError {
+    match error {
+        AppError::Timeout(seconds) => AppError::Glab(format!(
+            "GitLab CLI timed out after {seconds}s.\nThe GitLab project {name} may have been created before publishing failed. \
+             Check your GitLab projects before retrying."
+        )),
+        other => other,
+    }
+}
+
 /// The manual recovery a post-create failure hands the user, shared so every arm
 /// below the create states the same one.
 fn gl_created_project_hint(owner: &str, name: &str) -> String {
@@ -6294,10 +6305,17 @@ fn gl_created_project_hint(owner: &str, name: &str) -> String {
     )
 }
 
-/// The created project read back unparseably. The hint rides LINE ONE because the
-/// toast headline is the first line alone (`firstMeaningfulLine`,
-/// `src/lib/error-summary.ts`); appended after the detail it sits behind Details,
-/// where a user about to retry Publish never sees it.
+/// Both callers run after creation, so every variant becomes Glab to put that
+/// fact on line one, including git's remote-add failures. Unit variants cannot
+/// carry it; only the label changes, while Display preserves the original detail.
+fn gl_created_project_error(hint: &str, error: AppError) -> AppError {
+    AppError::Glab(gl_error_message(
+        &format!("Publishing didn't finish, but {hint}."),
+        error.to_string(),
+    ))
+}
+
+/// The created fact must ride line one, before parse detail, for the toast headline.
 fn gl_created_project_unreadable(hint: &str, detail: String) -> AppError {
     AppError::Glab(gl_error_message(
         &format!("Couldn't read the new project back, but {hint}."),
@@ -6401,7 +6419,9 @@ pub async fn publish_repo(
             args.push(topic);
         }
     }
-    run_glab(Some(repo_path), &args, GLAB_NETWORK_TIMEOUT).await?;
+    run_glab(Some(repo_path), &args, GLAB_NETWORK_TIMEOUT)
+        .await
+        .map_err(|e| gl_publish_create_error(&format!("{}/{name}", me.username), e))?;
 
     // The project now exists — from here on, any failure must SAY so, or a
     // retry (which re-creates) reads as an inexplicable "name already taken".
@@ -6410,9 +6430,6 @@ pub async fn publish_repo(
     // `glab repo create` does not wire a remote (validated live) — resolve the
     // created project's URLs and do it ourselves, then push the current branch.
     let enc = encode_project(&format!("{}/{name}", me.username));
-    // Both failures carry the hint, by different routes: the parse failure builds it
-    // into its own line one (the toast headline), glab's keeps the appended
-    // parenthetical.
     let out = match run_glab(
         Some(repo_path),
         &["api", &format!("projects/{enc}")],
@@ -6421,7 +6438,7 @@ pub async fn publish_repo(
     .await
     {
         Ok(out) => out,
-        Err(e) => return Err(AppError::Glab(format!("{e} ({created_hint})"))),
+        Err(e) => return Err(gl_created_project_error(&created_hint, e)),
     };
     let project: GlabProjectRef = serde_json::from_str(&out.stdout_lossy()).map_err(|e| {
         gl_created_project_unreadable(
@@ -6438,7 +6455,7 @@ pub async fn publish_repo(
     )
     .await
     {
-        return Err(AppError::Glab(format!("{e} ({created_hint})")));
+        return Err(gl_created_project_error(&created_hint, e));
     }
 
     // A push failure after this point self-recovers: origin exists, so the repo
@@ -9948,6 +9965,58 @@ mod my_work_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn publish_create_timeout_keeps_timeout_first_and_appends_hedge() {
+        let error = gl_publish_create_error("demo", AppError::Timeout(120));
+        let AppError::Glab(message) = error else {
+            panic!("a publish timeout must carry partial-publish guidance");
+        };
+        assert_eq!(
+            message.lines().next(),
+            Some("GitLab CLI timed out after 120s."),
+        );
+        let hedge = message.lines().last().unwrap();
+        assert!(hedge.contains("project demo may have been created"), "{hedge}");
+        assert!(hedge.contains("Check your GitLab projects before retrying"));
+        assert!(!message.to_ascii_lowercase().contains("was created"), "{message}");
+        assert!(matches!(
+            gl_publish_create_error("demo", AppError::GlabNotFound),
+            AppError::GlabNotFound,
+        ));
+    }
+
+    #[test]
+    fn created_project_cli_failures_keep_creation_on_line_one() {
+        let hint = gl_created_project_hint("alice", "demo");
+        for error in [
+            AppError::Glab("HTTP 503\nupstream unavailable".into()),
+            AppError::Git {
+                code: 128,
+                stderr: "fatal: could not add origin\npermission denied".into(),
+            },
+        ] {
+            let detail = error.to_string();
+            let message = gl_created_project_error(&hint, error).to_string();
+            let first = message.lines().next().unwrap();
+            assert!(first.contains("WAS created"), "{first}");
+            assert!(first.contains("alice/demo"), "{first}");
+            assert_eq!(message, format!("Publishing didn't finish, but {hint}.\n{detail}"));
+        }
+    }
+
+    #[tokio::test]
+    async fn publish_validation_failure_never_claims_creation() {
+        let state = AppState::default();
+        let error = publish_repo(&state, "", "", true, "", &[])
+            .await
+            .unwrap_err();
+        let AppError::InvalidArgument(message) = error else {
+            panic!("an empty project name must fail before creation");
+        };
+        assert_eq!(message, "a project name is required");
+        assert!(!message.to_ascii_lowercase().contains("was created"));
+    }
 
     #[test]
     fn access_uncertainty_keeps_only_single_line_technical_detail() {
