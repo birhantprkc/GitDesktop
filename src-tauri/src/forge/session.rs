@@ -88,14 +88,16 @@ impl SessionHealth {
     }
 }
 
-/// A streamed event from a reconnect child. `Code` carries the device-flow one-time
-/// code + URL (emitted once); `Line` is any other sanitized output line; `Finished`
-/// is terminal.
+/// A streamed event from a reconnect child. `Code` carries the device-flow
+/// verification URL and, once parsed, the one-time code. Emitted as soon as the URL is
+/// known and re-emitted at most once more if the code is parsed afterwards, so a CLI
+/// whose code wording we don't recognise still yields a usable URL. `Line` is any other
+/// sanitized output line; `Finished` is terminal.
 #[derive(Serialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ReconnectEvent {
     Code {
-        code: String,
+        code: Option<String>,
         url: String,
     },
     /// A sanitized output line, ≤300 chars, token material redacted.
@@ -924,7 +926,15 @@ pub async fn forge_reconnect(
 
     // The driver waits on the guard's `Notify` (which may already carry a cancel
     // permit). The guard lives across this await and unregisters on return.
-    run_reconnect_child(guard.notify.clone(), &binary, &args, is_github, &on_event).await
+    run_reconnect_child(
+        guard.notify.clone(),
+        &binary,
+        &args,
+        is_github,
+        &host,
+        &on_event,
+    )
+    .await
 }
 
 /// Cancel an in-flight reconnect by its frontend-generated `session_id`. Fires the
@@ -992,13 +1002,16 @@ fn sweep_unadopted_tombstone(session_id: &str) {
 }
 
 /// Spawn + drive the reconnect child. Reads stdout AND stderr concurrently (the
-/// one-time code can land on either), sanitizes every line, and emits at most one
-/// `Code` event. Registry cleanup is the caller's `ReconnectGuard`, not this fn.
+/// one-time code can land on either), sanitizes every line, and emits at most two
+/// `Code` events (see [`ReconnectParse::step`]). `host` is the already-validated flow
+/// host every extracted URL is pinned to. Registry cleanup is the caller's
+/// `ReconnectGuard`, not this fn.
 async fn run_reconnect_child(
     cancel: Arc<Notify>,
     binary: &PathBuf,
     args: &[String],
     is_github: bool,
+    host: &str,
     on_event: &Channel<ReconnectEvent>,
 ) -> AppResult<()> {
     let mut cmd = Command::new(binary);
@@ -1039,10 +1052,8 @@ async fn run_reconnect_child(
     let mut out_lines = BufReader::new(stdout).lines();
     let mut err_lines = BufReader::new(stderr).lines();
 
-    let mut code_emitted = false;
+    let mut parse = ReconnectParse::default();
     let mut collected: Vec<String> = Vec::new();
-    let mut last_code: Option<String> = None;
-    let mut last_url: Option<String> = None;
     let mut cancelled = false;
     let mut timed_out = false;
     let mut send_failed = false;
@@ -1071,8 +1082,7 @@ async fn run_reconnect_child(
                 match line {
                     Ok(Some(l)) => {
                         if !handle_reconnect_line(
-                            &l, &mut code_emitted, &mut last_code, &mut last_url,
-                            &mut collected, on_event,
+                            &l, host, &mut parse, &mut collected, on_event,
                         ) {
                             send_failed = true;
                             let _ = child.start_kill();
@@ -1086,8 +1096,7 @@ async fn run_reconnect_child(
                 match line {
                     Ok(Some(l)) => {
                         if !handle_reconnect_line(
-                            &l, &mut code_emitted, &mut last_code, &mut last_url,
-                            &mut collected, on_event,
+                            &l, host, &mut parse, &mut collected, on_event,
                         ) {
                             send_failed = true;
                             let _ = child.start_kill();
@@ -1144,41 +1153,76 @@ async fn run_reconnect_child(
     Ok(())
 }
 
-/// Process one raw output line: sanitize it, try to emit a single `Code` event once
-/// both code + URL are known, else emit a `Line`. Returns `false` when the channel
-/// send failed (frontend gone) so the caller can tear down.
+/// What one reconnect flow has parsed out of its output so far, and what it has
+/// already told the frontend. Carried across every line of both streams.
+#[derive(Default)]
+struct ReconnectParse {
+    code: Option<String>,
+    url: Option<String>,
+    url_emitted: bool,
+    code_emitted: bool,
+}
+
+impl ReconnectParse {
+    /// Fold one output line into the parse state and decide what it emits, in order:
+    /// a `Code` event when known state improved, then the sanitized `Line`. `clean` is
+    /// the sanitized (redacted, ≤300-char) text the `Line` carries; `raw` is the
+    /// untruncated original, which only URL extraction reads. Empty lines emit nothing.
+    ///
+    /// A `Code` carrying the parsed code swallows its line — the code renders instead.
+    /// A URL-ONLY `Code` does not: with no code parsed, the CLI's raw output is the
+    /// primary UI, and the URL-bearing line is the one that explains what happened.
+    ///
+    /// `Code` re-emits only when known state IMPROVES — the URL as soon as it is known,
+    /// then once more if the code's wording is recognised afterwards — so a flow emits
+    /// at most two of them.
+    fn step(&mut self, raw: &str, clean: &str, host: &str) -> Vec<ReconnectEvent> {
+        if self.code.is_none() {
+            self.code = find_one_time_code(clean);
+        }
+        if self.url.is_none() {
+            self.url = find_flow_url(raw, host);
+        }
+        let mut out = Vec::new();
+        let mut swallow_line = false;
+        if let Some(url) = self.url.clone() {
+            let have_code = self.code.is_some();
+            if !self.url_emitted || (have_code && !self.code_emitted) {
+                self.url_emitted = true;
+                self.code_emitted = have_code;
+                swallow_line = have_code;
+                out.push(ReconnectEvent::Code {
+                    code: self.code.clone(),
+                    url,
+                });
+            }
+        }
+        if !swallow_line && !clean.trim().is_empty() {
+            out.push(ReconnectEvent::Line {
+                text: clean.to_string(),
+            });
+        }
+        out
+    }
+}
+
+/// Process one raw output line: sanitize it, fold it into `parse`, and send whatever
+/// that step decided to emit, in order. Returns `false` when a channel send failed
+/// (frontend gone) so the caller can tear down.
 fn handle_reconnect_line(
     raw: &str,
-    code_emitted: &mut bool,
-    last_code: &mut Option<String>,
-    last_url: &mut Option<String>,
+    host: &str,
+    parse: &mut ReconnectParse,
     collected: &mut Vec<String>,
     on_event: &Channel<ReconnectEvent>,
 ) -> bool {
     let clean = sanitize_line(raw);
     collected.push(clean.clone());
-
-    if last_code.is_none() {
-        if let Some(c) = find_one_time_code(&clean) {
-            *last_code = Some(c);
-        }
-    }
-    if last_url.is_none() {
-        if let Some(u) = find_url(&clean) {
-            *last_url = Some(u);
-        }
-    }
-    // Emit the Code event ONCE, as soon as both are known.
-    if !*code_emitted {
-        if let (Some(code), Some(url)) = (last_code.clone(), last_url.clone()) {
-            *code_emitted = true;
-            return on_event.send(ReconnectEvent::Code { code, url }).is_ok();
-        }
-    }
-    if clean.trim().is_empty() {
-        return true;
-    }
-    on_event.send(ReconnectEvent::Line { text: clean }).is_ok()
+    // `all` short-circuits, so a failed send stops the rest of this line's events.
+    parse
+        .step(raw, &clean, host)
+        .into_iter()
+        .all(|event| on_event.send(event).is_ok())
 }
 
 /// A best-effort login from the collected reconnect output
@@ -1281,14 +1325,18 @@ fn utf8_char_len(lead: u8) -> usize {
     }
 }
 
-/// Extract a device one-time code like `3285-B415` from a line matching (case-
-/// insensitively) `one-time code:\s*([A-Z0-9]{4,}-[A-Z0-9]{4,})`. Hand-rolled (no
-/// regex dep).
+/// Extract a device one-time code like `3285-B415`. Requires the literal `one-time
+/// code` (case-insensitive), then reads the next token across a run of `:`, `(`, and
+/// whitespace, then gates it on the `<4+ alnum>-<4+ alnum>` shape — so gh's two known
+/// punctuations both parse (`one-time code: XXXX-YYYY`, and with its clipboard default
+/// on, `One-time code (XXXX-YYYY) copied to clipboard`) while prose following the
+/// phrase does not. Deliberately narrow: the code is the ADJACENT token, never a
+/// shape-match found elsewhere in the line. Hand-rolled (no regex dep).
 fn find_one_time_code(line: &str) -> Option<String> {
     let lower = line.to_ascii_lowercase();
-    let idx = lower.find("one-time code:")?;
-    let after = &line[idx + "one-time code:".len()..];
-    let after = after.trim_start();
+    let idx = lower.find("one-time code")?;
+    let after = &line[idx + "one-time code".len()..];
+    let after = after.trim_start_matches(|c: char| c == ':' || c == '(' || c.is_whitespace());
     // Read the first token: [A-Za-z0-9-] run.
     let token: String = after
         .chars()
@@ -1308,6 +1356,64 @@ fn find_one_time_code(line: &str) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// The longest a verification URL may be. glab's OAuth authorize URL measured 377
+/// chars, so the bound is generous; past it the candidate is REFUSED rather than
+/// truncated — half a URL is worse than none.
+const MAX_FLOW_URL: usize = 2048;
+
+/// The verification URL carried by one output line, host-pinned to the flow's own
+/// authority. Extracted from the REDACTED but UNTRUNCATED line, so a URL longer than
+/// the 300-char `Line` cap survives intact (glab prints its 377-char authorize URL
+/// inside a 405-char line). The pin is what makes the URL safe to open without a
+/// click: a docs link in a CLI error message must never qualify, and
+/// `ReconnectParse::url` being first-match-sticky means a stray URL would also block
+/// the real one. The compare elides the scheme's default web port from both sides —
+/// the rule [`crate::forge::web_authority`] pins — so a host registered `h:443` still
+/// matches the portless URL gh prints for it; any other port stays, being the
+/// instance's identity.
+fn find_flow_url(raw: &str, host: &str) -> Option<String> {
+    let url = find_url(&redact_tokens(raw))?;
+    // Content gates run on the candidate AS FOUND: the punctuation trim below strips
+    // a `]`, which would otherwise carry a redacted URL past this check.
+    if url.chars().count() > MAX_FLOW_URL || url.contains("[redacted]") {
+        return None;
+    }
+    // Prose punctuation around a URL rides the whitespace-terminated run into
+    // `openUrl`, which now fires without a click.
+    let url = url.trim_end_matches(['.', ',', ';', ':', ')', ']']);
+    let authority = url_authority(url)?;
+    // `user:pass@host` reads as the host to a human, and this URL is both displayed
+    // and opened.
+    if authority.contains('@') {
+        return None;
+    }
+    let https = url.starts_with("https://");
+    if !without_default_web_port(authority, https)
+        .eq_ignore_ascii_case(without_default_web_port(host, https))
+    {
+        return None;
+    }
+    Some(url.to_string())
+}
+
+/// A `host[:port]` with the scheme's default web port elided (`:443` https, `:80`
+/// http) — [`crate::forge::web_authority`]'s rule, applied to a bare authority.
+fn without_default_web_port(authority: &str, https: bool) -> &str {
+    let default_port = if https { ":443" } else { ":80" };
+    authority.strip_suffix(default_port).unwrap_or(authority)
+}
+
+/// A URL's authority — everything between `://` and the first `/`, `?`, or `#`.
+/// `None` for anything that isn't an `https`/`http` URL with a non-empty authority.
+fn url_authority(url: &str) -> Option<&str> {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..end];
+    (!authority.is_empty()).then_some(authority)
 }
 
 /// Extract the first `http://` / `https://` URL from a line (runs until whitespace).
@@ -1563,39 +1669,340 @@ mod tests {
         );
     }
 
+    // ── the measured CLI fixtures every arm below is driven with ──
+
+    /// gh 2.94.0, one-time code with a colon.
+    const GH_CODE_LINE_COLON: &str = "! First copy your one-time code: 5EF0-8E5F";
+    /// gh 2.101.0, which ships `clipboard: enabled` as a config default and drops the
+    /// colon from the wording entirely.
+    const GH_CODE_LINE_CLIPBOARD: &str = "! One-time code (8155-C4E1) copied to clipboard";
+    const GH_URL_LINE: &str =
+        "Open this URL to continue in your web browser: https://github.com/login/device";
+    const GH_DEVICE_URL: &str = "https://github.com/login/device";
+    /// glab 1.105.0's browser-open failure: 405 chars carrying a 377-char authorize
+    /// URL. The client-id and code-challenge values are stand-ins at their measured
+    /// lengths (64 hex / 43 base64url); every other byte is as captured.
+    const GLAB_BROWSER_FAIL_LINE: &str = "Failed opening a browser at https://gitlab.com/oauth/authorize?client_id=41d48f94c9b5e0a7d2f318b64e0cd5a913f7be2d84c06915ab73e2c8d140f6b9&code_challenge=Hs9Qk2Lm4Tz1XbPvR7aYcN0dFgJiKoWu3SeQxZlTyAB&code_challenge_method=S256&redirect_uri=http%3A%2F%2Flocalhost%3A7171%2Fauth%2Fredirect&response_type=code&scope=openid+profile+read_user+write_repository+api&state=sK4JTZBSHCVWtNQYXl0TE0fbQZUq1VHXlSvJRBRPsFA";
+
     #[test]
-    fn code_and_url_emitted_once() {
-        // Simulate the two live lines arriving on the stream (code line, then URL line).
-        let mut code_emitted = false;
-        let mut last_code = None;
-        let mut last_url = None;
+    fn one_time_code_from_gh_clipboard_wording() {
+        // gh ≥ 2.101.0 — the wording that stranded the dialog with no code at all.
+        assert_eq!(
+            find_one_time_code(GH_CODE_LINE_CLIPBOARD).as_deref(),
+            Some("8155-C4E1")
+        );
+    }
+
+    #[test]
+    fn one_time_code_from_gh_colon_wording() {
+        assert_eq!(
+            find_one_time_code(GH_CODE_LINE_COLON).as_deref(),
+            Some("5EF0-8E5F")
+        );
+    }
+
+    #[test]
+    fn one_time_code_rejects_prose_after_the_phrase() {
+        // The trim set crosses punctuation, not words: the next TOKEN is the code or
+        // there is none.
+        assert_eq!(
+            find_one_time_code("could not read your one-time code from the clipboard"),
+            None
+        );
+    }
+
+    // ── the emission state machine, driven through the production fold ──
+
+    /// Drive `ReconnectParse` exactly as `handle_reconnect_line` does — sanitize, then
+    /// step — and collect what each line emitted. Only the Channel send is left out.
+    fn drive(lines: &[&str], host: &str) -> Vec<ReconnectEvent> {
+        let mut parse = ReconnectParse::default();
+        lines
+            .iter()
+            .flat_map(|raw| parse.step(raw, &sanitize_line(raw), host))
+            .collect()
+    }
+
+    fn line_texts(events: &[ReconnectEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                ReconnectEvent::Line { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn code_events(events: &[ReconnectEvent]) -> Vec<(Option<String>, String)> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                ReconnectEvent::Code { code, url } => Some((code.clone(), url.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn code_then_url_emits_one_code_event_carrying_the_code() {
+        // The mainline: gh prints the code line before the URL line.
+        let events = drive(&[GH_CODE_LINE_CLIPBOARD, GH_URL_LINE], "github.com");
+        let codes = code_events(&events);
+        assert_eq!(codes.len(), 1, "one Code event, not a URL-only one first");
+        assert_eq!(codes[0].0.as_deref(), Some("8155-C4E1"));
+        assert_eq!(codes[0].1, GH_DEVICE_URL);
+        // The code line reaches the frontend as progress output; the URL-bearing line
+        // is swallowed, its content now rendering as the code + link.
+        assert_eq!(
+            line_texts(&events),
+            vec![GH_CODE_LINE_CLIPBOARD.to_string()]
+        );
+    }
+
+    #[test]
+    fn a_url_alone_emits_a_code_event_with_no_code() {
+        let events = drive(
+            &["! wording we do not recognise", GH_URL_LINE],
+            "github.com",
+        );
+        let codes = code_events(&events);
+        assert_eq!(codes.len(), 1);
+        assert_eq!(codes[0].0, None);
+        assert_eq!(codes[0].1, GH_DEVICE_URL);
+        // With no code parsed the raw output is the primary UI, so the URL-bearing
+        // line is NOT swallowed — it is the one that says what the CLI was doing.
+        assert_eq!(
+            line_texts(&events),
+            vec![
+                "! wording we do not recognise".to_string(),
+                GH_URL_LINE.to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_code_after_a_url_only_emit_upgrades_exactly_once() {
+        let events = drive(
+            &[
+                GH_URL_LINE,
+                GH_CODE_LINE_COLON,
+                "still waiting",
+                GH_URL_LINE,
+            ],
+            "github.com",
+        );
+        let codes = code_events(&events);
+        assert_eq!(codes.len(), 2, "at most two Code events per flow, ever");
+        assert_eq!(codes[0].0, None);
+        assert_eq!(codes[1].0.as_deref(), Some("5EF0-8E5F"));
+        assert_eq!(codes[1].1, GH_DEVICE_URL);
+    }
+
+    #[test]
+    fn a_mismatched_host_emits_no_code_event_at_all() {
+        // The pin's cost, stated: with no URL for this flow's host there is nothing
+        // safe to show or open, so the lines pass through as progress output.
+        let events = drive(&[GH_CODE_LINE_COLON, GH_URL_LINE], "ghes.example");
+        assert!(code_events(&events).is_empty());
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, ReconnectEvent::Line { .. }))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn empty_lines_emit_nothing() {
+        assert!(drive(&["", "   "], "github.com").is_empty());
+    }
+
+    // ── URL extraction: over-cap survival + the host pin ──
+
+    #[test]
+    fn an_over_cap_url_reaches_the_event_intact() {
+        assert_eq!(GLAB_BROWSER_FAIL_LINE.chars().count(), 405);
+        let codes = code_events(&drive(&[GLAB_BROWSER_FAIL_LINE], "gitlab.com"));
+        assert_eq!(codes.len(), 1);
+        assert_eq!(codes[0].0, None);
+        assert_eq!(codes[0].1.chars().count(), 377);
+        assert!(
+            codes[0]
+                .1
+                .ends_with("&state=sK4JTZBSHCVWtNQYXl0TE0fbQZUq1VHXlSvJRBRPsFA"),
+            "the trailing query params must survive the Line cap"
+        );
+        // The `Line` text's own 300-char bound is untouched.
+        assert_eq!(sanitize_line(GLAB_BROWSER_FAIL_LINE).chars().count(), 300);
+    }
+
+    /// Drives the production call site, not just the fold: `drive()` shares
+    /// `ReconnectParse::step` but passes `raw` itself, so only this pins that
+    /// `handle_reconnect_line` hands URL extraction the UNTRUNCATED line.
+    #[test]
+    fn the_line_handler_sends_the_untruncated_url() {
+        use tauri::ipc::InvokeResponseBody;
+
+        let sent: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&sent);
+        let channel = Channel::new(move |body: InvokeResponseBody| {
+            if let InvokeResponseBody::Json(json) = body {
+                captured.lock().expect("capture poisoned").push(json);
+            }
+            Ok(())
+        });
+        let mut parse = ReconnectParse::default();
         let mut collected = Vec::new();
-        // We can't build a real Channel here; test the state machine's harvesting
-        // directly instead.
-        let l1 = "! First copy your one-time code: 3285-B415";
-        let clean1 = sanitize_line(l1);
-        collected.push(clean1.clone());
-        if last_code.is_none() {
-            last_code = find_one_time_code(&clean1);
-        }
-        if last_url.is_none() {
-            last_url = find_url(&clean1);
-        }
-        assert_eq!(last_code.as_deref(), Some("3285-B415"));
-        assert!(last_url.is_none());
-        let l2 = "Open this URL to continue in your web browser: https://github.com/login/device";
-        let clean2 = sanitize_line(l2);
-        collected.push(clean2.clone());
-        if last_url.is_none() {
-            last_url = find_url(&clean2);
-        }
-        assert_eq!(last_url.as_deref(), Some("https://github.com/login/device"));
-        // Both known now → a Code event would fire exactly once.
-        assert!(!code_emitted);
-        if let (Some(_), Some(_)) = (&last_code, &last_url) {
-            code_emitted = true;
-        }
-        assert!(code_emitted);
+        assert!(handle_reconnect_line(
+            GLAB_BROWSER_FAIL_LINE,
+            "gitlab.com",
+            &mut parse,
+            &mut collected,
+            &channel,
+        ));
+
+        let wire = sent.lock().expect("capture poisoned");
+        // The Code event, then the line itself (no code parsed → the output is the UI).
+        assert_eq!(wire.len(), 2, "code event then its line");
+        let event: serde_json::Value = serde_json::from_str(&wire[0]).unwrap();
+        assert_eq!(event["type"], "code");
+        let url = event["url"].as_str().expect("a url on the wire");
+        assert_eq!(url.chars().count(), 377);
+        assert!(url.ends_with("&state=sK4JTZBSHCVWtNQYXl0TE0fbQZUq1VHXlSvJRBRPsFA"));
+    }
+
+    #[test]
+    fn a_url_off_the_flows_host_is_not_extracted() {
+        assert_eq!(find_flow_url(GLAB_BROWSER_FAIL_LINE, "example.com"), None);
+        // A docs link in an error message must never become the auto-opened URL.
+        assert_eq!(
+            find_flow_url("see https://cli.github.com/manual for help", "github.com"),
+            None
+        );
+        // A ported instance matches on its full authority, and the compare is
+        // ASCII-case-insensitive.
+        assert_eq!(
+            find_flow_url(
+                "go to https://GHES.example:8443/login/device",
+                "ghes.example:8443"
+            )
+            .as_deref(),
+            Some("https://GHES.example:8443/login/device")
+        );
+        // A host registered with the scheme's default port is the same host the CLI
+        // prints portless — either spelling, both directions.
+        assert_eq!(
+            find_flow_url(
+                "go to https://ghes.example/login/device",
+                "ghes.example:443"
+            )
+            .as_deref(),
+            Some("https://ghes.example/login/device")
+        );
+        assert_eq!(
+            find_flow_url(
+                "go to https://ghes.example:443/login/device",
+                "ghes.example"
+            )
+            .as_deref(),
+            Some("https://ghes.example:443/login/device")
+        );
+        // The elision is that ONE port, not any-port-matches.
+        assert_eq!(
+            find_flow_url(
+                "go to https://ghes.example:8443/login/device",
+                "ghes.example"
+            ),
+            None
+        );
+        assert_eq!(
+            find_flow_url(
+                "go to https://ghes.example/login/device",
+                "ghes.example:8443"
+            ),
+            None
+        );
+        // http has its own default, and https must not elide it.
+        assert_eq!(
+            find_flow_url("go to http://ghes.example:80/login/device", "ghes.example").as_deref(),
+            Some("http://ghes.example:80/login/device")
+        );
+        assert_eq!(
+            find_flow_url("go to https://ghes.example:80/login/device", "ghes.example"),
+            None
+        );
+    }
+
+    #[test]
+    fn trailing_prose_punctuation_is_trimmed_off_the_url() {
+        // The trimmed URL is what gets opened without a click, so a sentence-ending
+        // period must not ride along.
+        assert_eq!(
+            find_flow_url("open https://github.com/login/device. now", "github.com").as_deref(),
+            Some(GH_DEVICE_URL)
+        );
+        assert_eq!(
+            find_flow_url("(see https://github.com/login/device).", "github.com").as_deref(),
+            Some(GH_DEVICE_URL)
+        );
+    }
+
+    #[test]
+    fn a_credential_embedding_authority_is_refused() {
+        assert_eq!(
+            find_flow_url(
+                "open https://github.com@evil.example/login/device",
+                "github.com"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn an_absurdly_long_url_is_refused_not_truncated() {
+        let line = format!(
+            "go to https://github.com/login/device?q={}",
+            "x".repeat(2048)
+        );
+        assert_eq!(find_flow_url(&line, "github.com"), None);
+    }
+
+    #[test]
+    fn an_empty_authority_is_refused() {
+        // `find_url` only requires something after the scheme, so `https:///x` reaches
+        // here with nothing to compare against the host.
+        assert_eq!(find_flow_url("see https:///x now", "github.com"), None);
+    }
+
+    #[test]
+    fn a_url_with_redaction_spliced_in_is_refused() {
+        // Redaction lands inside the URL → the link is dead; offering to open it is
+        // worse than offering nothing.
+        let line = "open https://github.com/login/device?t=ghp_SECRETTOKEN0000 now";
+        assert!(redact_tokens(line).contains("[redacted]"));
+        assert_eq!(find_flow_url(line, "github.com"), None);
+    }
+
+    #[test]
+    fn code_event_serializes_a_null_code() {
+        // An omitted key reads as `undefined` on the TS side, which the dialog's
+        // `code === null` check would miss.
+        let v = serde_json::to_value(ReconnectEvent::Code {
+            code: None,
+            url: GH_DEVICE_URL.to_string(),
+        })
+        .unwrap();
+        assert_eq!(v["type"], "code");
+        assert!(v.get("code").is_some(), "the `code` key must be present");
+        assert_eq!(v["code"], serde_json::Value::Null);
+        assert_eq!(v["url"], GH_DEVICE_URL);
+        let parsed = serde_json::to_value(ReconnectEvent::Code {
+            code: Some("8155-C4E1".to_string()),
+            url: GH_DEVICE_URL.to_string(),
+        })
+        .unwrap();
+        assert_eq!(parsed["code"], "8155-C4E1");
     }
 
     // ── token redaction ──
