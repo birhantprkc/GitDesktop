@@ -50,11 +50,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { CommentComposer } from "@/features/conversations/CommentComposer";
 import { CommitsList } from "@/features/conversations/CommitsList";
+import { ConversationScrollArea } from "@/features/conversations/ConversationScrollArea";
 import { DeleteCommentDialog } from "@/features/conversations/DeleteCommentDialog";
 import {
   EditTitleBodyDialog,
@@ -68,6 +68,7 @@ import { ReactionBar } from "@/features/conversations/ReactionBar";
 import { AuthorAvatar, LabelChip } from "@/features/conversations/Thread";
 import { useCancelOnIdentityChange } from "@/features/conversations/useAiStream";
 import { useMentionCandidates } from "@/features/conversations/useMentionCandidates";
+import { useThreadJumpHotkeys } from "@/features/conversations/useThreadJumpHotkeys";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import type { LineWidget } from "@/features/diff/DiffSurface";
 import { AssigneesPopover } from "@/features/issues/IssueMetaPickers";
@@ -1939,6 +1940,14 @@ export function RemotePrView({
     if (revealReviewId !== null) setRevealReviewId(null);
   }, [revealReviewId]);
 
+  const threadActive =
+    isSelectedPr &&
+    section === "conversation" &&
+    !resolve &&
+    !!pr &&
+    !details.isPlaceholderData &&
+    !details.isError;
+  const jumpRef = useThreadJumpHotkeys(threadActive);
   // The palette's route to the comment box. Every term the composer itself is
   // gated on rides here too, so the action is offered only where there is a box
   // to focus: a resolve takes the whole view over, and the other sub-tabs have
@@ -1946,13 +1955,7 @@ export function RemotePrView({
   useHotkeyAction(
     "focus-comment",
     () => composerRef.current?.focus(),
-    isSelectedPr &&
-      canComment &&
-      section === "conversation" &&
-      !resolve &&
-      !!pr &&
-      !details.isPlaceholderData &&
-      !details.isError,
+    threadActive && canComment,
   );
 
   if (details.isPending) {
@@ -2874,9 +2877,7 @@ export function RemotePrView({
 
       {section === "conversation" && (
         <>
-          {/* overflow-hidden contains the thread's natural height (vendored Root is
-              `relative`-only) so a long PR can't leak a window scrollbar. */}
-          <ScrollArea className="min-h-0 flex-1 overflow-hidden">
+          <ConversationScrollArea ref={jumpRef} className="flex-1">
             <div className="space-y-4 p-4">
               <div className="group space-y-1 border-b pb-3">
                 <div className="flex items-start justify-between gap-2">
@@ -3071,7 +3072,7 @@ export function RemotePrView({
                   </p>
                 )}
             </div>
-          </ScrollArea>
+          </ConversationScrollArea>
           {/* Shown for closed/merged PRs too — GitHub lets you comment (and
               quote-reply) after a PR closes; only reviews are open-only. On GitLab
               the composer shows (the first MR writes), but the GitHub-only Review

@@ -25,9 +25,9 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CommentComposer } from "@/features/conversations/CommentComposer";
+import { ConversationScrollArea } from "@/features/conversations/ConversationScrollArea";
 import { DeleteCommentDialog } from "@/features/conversations/DeleteCommentDialog";
 import {
   EditTitleBodyDialog,
@@ -41,6 +41,7 @@ import {
   Thread,
 } from "@/features/conversations/Thread";
 import { useMentionCandidates } from "@/features/conversations/useMentionCandidates";
+import { useThreadJumpHotkeys } from "@/features/conversations/useThreadJumpHotkeys";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import {
   sortTimeline,
@@ -290,17 +291,19 @@ export function RemoteIssueView({
 
   const issue = details.data;
 
+  const threadActive =
+    isSelectedIssue &&
+    !!issue &&
+    !details.isPlaceholderData &&
+    !details.isError;
+  const jumpRef = useThreadJumpHotkeys(threadActive);
   // The composer sits below the thread AND the sidebar, so reaching it by Tab
   // means crossing the whole rail — this is the keyboard route past it. Enabled
   // only while the box is actually on screen.
   useHotkeyAction(
     "focus-comment",
     () => composerRef.current?.focus(),
-    isSelectedIssue &&
-      canComment &&
-      !!issue &&
-      !details.isPlaceholderData &&
-      !details.isError,
+    threadActive && canComment,
   );
 
   if (details.isPending) {
@@ -1037,9 +1040,7 @@ export function RemoteIssueView({
             flex MAIN axis, so in the column the body would otherwise floor at its
             thread's full height and push a scrollbar onto the document. */}
         <div className="flex min-w-0 flex-1 flex-col @max-2xl/issue-detail:min-h-0">
-          {/* overflow-hidden contains the thread's natural height (vendored Root is
-              `relative`-only) so a long issue can't leak a window scrollbar. */}
-          <ScrollArea className="min-h-0 flex-1 overflow-hidden">
+          <ConversationScrollArea ref={jumpRef} className="flex-1">
             <div className="space-y-4 p-4">
               <div className="group space-y-1">
                 <p className="flex items-center gap-2 text-xs">
@@ -1154,7 +1155,7 @@ export function RemoteIssueView({
                   </p>
                 )}
             </div>
-          </ScrollArea>
+          </ConversationScrollArea>
         </div>
         <IssueSidebar
           // Remounts the rail per issue so its sections' drafts (the uncontrolled

@@ -42,10 +42,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CommentComposer } from "@/features/conversations/CommentComposer";
 import { CommentEditor } from "@/features/conversations/CommentEditor";
+import { ConversationScrollArea } from "@/features/conversations/ConversationScrollArea";
+import { useThreadJumpHotkeys } from "@/features/conversations/useThreadJumpHotkeys";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { JiraIssueSidebar } from "@/features/issues/JiraIssueSidebar";
 import type { ForgeUserRef } from "@/lib/git/types";
@@ -1528,6 +1529,13 @@ export function JiraIssueView({
   // remounting its own per-issue drafts.
   const issueIdentity = `${repoPath}#${issueKey}`;
   const compose = useKeyedEntityState(issueIdentity, "");
+  const threadActive =
+    selectedIssue?.kind === "jira" &&
+    selectedIssue.id === issueKey &&
+    !!details.data &&
+    !details.isPlaceholderData &&
+    !details.isError;
+  const jumpRef = useThreadJumpHotkeys(threadActive);
   // The composer sits below the thread AND the sidebar, so reaching it by Tab
   // means crossing the whole rail — this is the keyboard route past it. Enabled
   // only while the box is actually on screen, and only for the view that owns
@@ -1535,12 +1543,7 @@ export function JiraIssueView({
   useHotkeyAction(
     "focus-comment",
     () => composerRef.current?.focus(),
-    selectedIssue?.kind === "jira" &&
-      selectedIssue.id === issueKey &&
-      canComment &&
-      !!details.data &&
-      !details.isPlaceholderData &&
-      !details.isError,
+    threadActive && canComment,
   );
 
   // The link resolved to nothing (unlinked, or unlinked while this view was
@@ -1734,10 +1737,7 @@ export function JiraIssueView({
             flex MAIN axis, so in the column the body would otherwise floor at its
             thread's full height and push a scrollbar onto the document. */}
         <div className="flex min-w-0 flex-1 flex-col @max-2xl/jira-detail:min-h-0">
-          {/* overflow-hidden contains the content's natural height (vendored
-              Root is `relative`-only) so a long issue can't leak a window
-              scrollbar. */}
-          <ScrollArea className="min-h-0 flex-1 overflow-hidden">
+          <ConversationScrollArea ref={jumpRef} className="flex-1">
             <div className={cn("space-y-4 p-4", PLACEHOLDER_FADE, staleDim)}>
               <div className="border-b pb-3">
                 {issue.descriptionMd.trim() ? (
@@ -1776,7 +1776,7 @@ export function JiraIssueView({
                 </p>
               )}
             </div>
-          </ScrollArea>
+          </ConversationScrollArea>
         </div>
 
         <JiraIssueSidebar

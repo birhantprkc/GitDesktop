@@ -33,10 +33,10 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { CommentComposer } from "@/features/conversations/CommentComposer";
+import { ConversationScrollArea } from "@/features/conversations/ConversationScrollArea";
 import { DeleteCommentDialog } from "@/features/conversations/DeleteCommentDialog";
 import { LabelsPopover } from "@/features/conversations/LabelsPopover";
 import { makeQuoteReply } from "@/features/conversations/quoteReply";
@@ -47,6 +47,7 @@ import {
   Thread,
 } from "@/features/conversations/Thread";
 import { useMentionCandidates } from "@/features/conversations/useMentionCandidates";
+import { useThreadJumpHotkeys } from "@/features/conversations/useThreadJumpHotkeys";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { ScopeRefreshHint } from "@/features/repo-settings/ScopeRefreshHint";
 import { copyText } from "@/lib/clipboard";
@@ -261,16 +262,19 @@ export function DiscussionView({
   const onError = (e: unknown) => toastError(e);
   const d = details.data;
 
+  const threadActive =
+    selectedDiscussion?.number === number &&
+    !!d &&
+    !details.isPlaceholderData &&
+    !details.isError;
+  const jumpRef = useThreadJumpHotkeys(threadActive);
   // The palette's route to the comment box, so reaching it never depends on
   // tabbing the whole thread. Only the view that owns the selection answers —
   // the mounted one lags it through a switch.
   useHotkeyAction(
     "focus-comment",
     () => composerRef.current?.focus(),
-    selectedDiscussion?.number === number &&
-      !!d &&
-      !details.isPlaceholderData &&
-      !details.isError,
+    threadActive,
   );
 
   if (details.isPending) {
@@ -753,9 +757,7 @@ export function DiscussionView({
           disabledReason={staleReason}
         />
       </header>
-      {/* overflow-hidden contains the thread's natural height (vendored Root is
-          `relative`-only) so a long discussion can't leak a window scrollbar. */}
-      <ScrollArea className="min-h-0 flex-1 overflow-hidden">
+      <ConversationScrollArea ref={jumpRef} className="flex-1">
         <div className="space-y-4 p-4">
           <div className="group space-y-1">
             <p className="flex items-center gap-2 text-xs">
@@ -1006,7 +1008,7 @@ export function DiscussionView({
             <p className="text-xs text-muted-foreground">No comments yet.</p>
           )}
         </div>
-      </ScrollArea>
+      </ConversationScrollArea>
       {/* empty:hidden: the hint self-gates to null (scopes covered, non-classic
           token, or still loading), and the wrapper must then contribute no
           border or padding of its own. */}

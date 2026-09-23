@@ -31,10 +31,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { BranchDiffView } from "@/features/compare/BranchDiffView";
 import { CommentComposer } from "@/features/conversations/CommentComposer";
 import { CommitsList } from "@/features/conversations/CommitsList";
+import { ConversationScrollArea } from "@/features/conversations/ConversationScrollArea";
 import { DeleteCommentDialog } from "@/features/conversations/DeleteCommentDialog";
 import {
   EditTitleBodyDialog,
@@ -44,6 +44,7 @@ import { LocalComment } from "@/features/conversations/LocalComment";
 import { useCancelOnIdentityChange } from "@/features/conversations/useAiStream";
 import { useLocalConversation } from "@/features/conversations/useLocalConversation";
 import { useMentionCandidates } from "@/features/conversations/useMentionCandidates";
+import { useThreadJumpHotkeys } from "@/features/conversations/useThreadJumpHotkeys";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { CommitDetailView } from "@/features/history/CommitDetailView";
 import { JiraRefRow } from "@/features/issues/JiraRefRow";
@@ -302,17 +303,20 @@ export function LocalPrView({
   );
   const defaultBranch = useDefaultBranch(repoPath);
 
+  const threadActive =
+    selectedPr?.kind === "local" &&
+    selectedPr.id === id &&
+    section === "conversation" &&
+    !!pr &&
+    !pr.pendingMerge?.worktreePath;
+  const jumpRef = useThreadJumpHotkeys(threadActive);
   // The palette's route to the comment box. Every term the composer itself is
   // gated on rides here too: a paused merge takes the whole view over, and the
   // other sub-tabs have no composer.
   useHotkeyAction(
     "focus-comment",
     () => composerRef.current?.focus(),
-    selectedPr?.kind === "local" &&
-      selectedPr.id === id &&
-      section === "conversation" &&
-      !!pr &&
-      !pr.pendingMerge?.worktreePath,
+    threadActive,
   );
 
   if (!pr) {
@@ -858,9 +862,7 @@ export function LocalPrView({
 
       {section === "conversation" && (
         <>
-          {/* overflow-hidden contains the thread's natural height (vendored Root is
-              `relative`-only) so a long PR can't leak a window scrollbar. */}
-          <ScrollArea className="min-h-0 flex-1 overflow-hidden">
+          <ConversationScrollArea ref={jumpRef} className="flex-1">
             <div className="space-y-4 p-4">
               <div className="group flex items-start justify-between gap-2 border-b pb-3">
                 <div className="min-w-0 flex-1">
@@ -1009,7 +1011,7 @@ export function LocalPrView({
                 return <div className="space-y-4">{rendered}</div>;
               })()}
             </div>
-          </ScrollArea>
+          </ConversationScrollArea>
           {/* Shown for closed PRs too, so you can comment / quote-reply after
               closing; approving stays open-only. */}
           <CommentComposer

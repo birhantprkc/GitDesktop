@@ -34,8 +34,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { CommentComposer } from "@/features/conversations/CommentComposer";
+import { ConversationScrollArea } from "@/features/conversations/ConversationScrollArea";
 import { DeleteCommentDialog } from "@/features/conversations/DeleteCommentDialog";
 import {
   EditTitleBodyDialog,
@@ -44,6 +44,7 @@ import {
 import { LocalComment } from "@/features/conversations/LocalComment";
 import { useLocalConversation } from "@/features/conversations/useLocalConversation";
 import { useMentionCandidates } from "@/features/conversations/useMentionCandidates";
+import { useThreadJumpHotkeys } from "@/features/conversations/useThreadJumpHotkeys";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { copyText } from "@/lib/clipboard";
 import { forgeFeatureReady, useForgeStatus } from "@/lib/git/queries";
@@ -129,12 +130,15 @@ export function LocalIssueView({
     edit.setOpen(false);
   }
 
+  const threadActive =
+    selectedIssue?.kind === "local" && selectedIssue.id === id && !!issue;
+  const jumpRef = useThreadJumpHotkeys(threadActive);
   // The palette's route to the comment box. Only the view that owns the
   // selection answers — the mounted one lags it through a switch.
   useHotkeyAction(
     "focus-comment",
     () => composerRef.current?.focus(),
-    selectedIssue?.kind === "local" && selectedIssue.id === id && !!issue,
+    threadActive,
   );
 
   if (!issue) {
@@ -317,9 +321,7 @@ export function LocalIssueView({
         )}
       </header>
 
-      {/* overflow-hidden contains the content's natural height (vendored Root is
-          `relative`-only) so a long issue can't leak a window scrollbar. */}
-      <ScrollArea className="min-h-0 flex-1 overflow-hidden">
+      <ConversationScrollArea ref={jumpRef} className="flex-1">
         <div className="space-y-4 p-4">
           <div className="group flex items-start justify-between gap-2 border-b pb-3">
             <div className="min-w-0 flex-1">
@@ -373,7 +375,7 @@ export function LocalIssueView({
             <p className="text-xs text-muted-foreground">No comments yet.</p>
           )}
         </div>
-      </ScrollArea>
+      </ConversationScrollArea>
 
       <CommentComposer
         ref={composerRef}
