@@ -1,5 +1,10 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
-import { type ErrorPresentation, presentError } from "@/lib/error-summary";
+import {
+  composedErrorPresentation,
+  type ErrorPresentation,
+  presentError,
+} from "@/lib/error-summary";
 import { useErrorDialog } from "@/lib/stores/error-dialog";
 
 /**
@@ -37,6 +42,41 @@ export function toastError(e: unknown) {
  */
 export function toastErrorWithNote(e: unknown, note: string) {
   showErrorToast(e, note);
+}
+
+/**
+ * A failure toast whose title composes app prose around one or more raw errors
+ * ("Created issue #12, but adding it to a project failed: …"). Details/Copy
+ * (`errorToastAction`) rides the cancel slot when `view` holds the action,
+ * else it IS the action; the dialog content is `composedErrorPresentation`'s.
+ */
+export function toastComposedError(opts: {
+  /** The composed headline (already carries summaries where it wants them). */
+  title: string;
+  /** The raw failure(s) behind it — at least one. */
+  errors: readonly unknown[];
+  /** Per-failure heading when several compose (same order as `errors`); each
+   *  becomes a section header above that failure's full text in Details. */
+  headings?: readonly string[];
+  /** Toast description (origin note, or a one-line reason) — free text. */
+  description?: string;
+  /** Primary View action for the created entity, when one exists. */
+  view?: { url: string };
+  /** Defaults to 8000, matching `showErrorToast`. */
+  duration?: number;
+}): void {
+  const { title, errors, headings, description, view, duration } = opts;
+  const details = errorToastAction(
+    composedErrorPresentation(title, errors, headings),
+  );
+  toast.error(title, {
+    description,
+    duration: duration ?? 8000,
+    action: view
+      ? { label: "View", onClick: () => openUrl(view.url) }
+      : details,
+    cancel: view ? details : undefined,
+  });
 }
 
 /**
