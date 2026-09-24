@@ -1,6 +1,8 @@
 import {
+  hashKey,
   type InfiniteData,
   notifyManager,
+  type Query,
   type QueryClient,
   type QueryKey,
   replaceEqualDeep,
@@ -41,9 +43,13 @@ import {
 } from "./board-order";
 import { keepPreviousDataForKeyAxes, repoKeys } from "./core";
 import {
+  boardReadFailed,
+  boardReadOwed,
+  boardRereadsRunning,
   invalidateProjectBoards,
   pendingBoardWrites,
   projectItemsRepoKey,
+  subscribeBoardRereads,
 } from "./internal";
 
 /** The GitHub Projects (v2) boards an item could join — repo-level plus the
@@ -253,25 +259,45 @@ const projectItemsFamilyKey = (repo: string, projectId: string) =>
 /** `archived` is an identity axis for the same reason `query` is: asking for both
  *  archived states is a DIFFERENT set of items, with its own `totalCount`. It sits
  *  past the board in the key, so the family above still prefixes over it — a write
- *  that patches every cached lens reaches both states without knowing about them. */
+ *  that patches every cached lens reaches both states without knowing about them.
+ *
+ *  `rich` is an identity axis too, for a different reason: the rich read carries
+ *  the connection-valued fields the lean one omits, so the two answers are not
+ *  interchangeable caches of one read. Past the board like the other two, so every
+ *  family walk reaches both richnesses; the positional readers below address the
+ *  query and archived axes by INDEX, so a trailing axis can't shift them. */
 const projectItemsKey = (
   repo: string,
   projectId: string,
   query: string | null,
   archived: boolean,
-) => [...projectItemsFamilyKey(repo, projectId), query, archived] as const;
+  rich: boolean,
+) =>
+  [...projectItemsFamilyKey(repo, projectId), query, archived, rich] as const;
+
+/** Where {@link projectItemsKey} puts the query and archived axes: right after the
+ *  four-element family prefix. */
+const QUERY_AXIS = 4;
+const ARCHIVED_AXIS = 5;
+const RICH_AXIS = 6;
+
+/** Whether a cached board key is the RICH read, whose items carry the
+ *  connection-valued fields a lean one omits. */
+function keyIsRich(key: QueryKey): boolean {
+  return key[RICH_AXIS] === true;
+}
 
 /** Whether a cached board key is the archived-INCLUSIVE lens. Read off the key
  *  rather than passed in: one write patches every cached lens of a board at once,
  *  and what the right patch IS differs between a lens that draws archived cards and
- *  one that doesn't. The axis is {@link projectItemsKey}'s last element. */
+ *  one that doesn't. */
 function keyShowsArchived(key: QueryKey): boolean {
-  return key.at(-1) === true;
+  return key[ARCHIVED_AXIS] === true;
 }
 
 /**
- * Whether a cached board key is the UNFILTERED read — the `query` axis, which sits
- * one before the archived one in {@link projectItemsKey}.
+ * Whether a cached board key is the UNFILTERED read — the `query` axis of
+ * {@link projectItemsKey}.
  *
  * The BOUNDED-COUNTS line, and the first of two local tests. A patch may move a
  * lens's `totalCount` only where it can decide that the figure held the card: an
@@ -283,7 +309,7 @@ function keyShowsArchived(key: QueryKey): boolean {
  * stale, where a guess compounds across repeated writes.
  */
 function keyIsUnfiltered(key: QueryKey): boolean {
-  return key.at(-2) === null;
+  return key[QUERY_AXIS] === null;
 }
 
 /** `data` with the LAST loaded page's `totalCount` moved by `delta` — the last page
@@ -330,9 +356,9 @@ export type BoardWriteKind =
   | "edit-draft"
   /** The four BATCH verbs, one per single-card sibling above. Apart from those
    *  kinds rather than folded into them because the panel's gates, labels and
-   *  strip all have to tell "this one card" from "the selection" — and because a
-   *  bulk write's variables carry a LIST where the single-card ones carry an
-   *  `itemId`. */
+   *  write indicator all have to tell "this one card" from "the selection" — and
+   *  because a bulk write's variables carry a LIST where the single-card ones
+   *  carry an `itemId`. */
   | "bulk-move"
   | "bulk-archive"
   | "bulk-restore"
@@ -372,9 +398,9 @@ const boardWriteKey = (kind: BoardWriteKind) => ["board-write", kind] as const;
 /** Filter prefix for EVERY board write — narrowed to one repo by variables below. */
 const BOARD_WRITES_KEY = ["board-write"] as const;
 
-/** One pending board write, flattened for the panel's holds, strip and busy card.
- *  The two value fields are display-only reads off the write's own variables, and
- *  absent on the kinds that don't carry them. */
+/** One pending board write, flattened for the panel's holds, write indicator and
+ *  busy card. The two value fields are display-only reads off the write's own
+ *  variables, and absent on the kinds that don't carry them. */
 export interface PendingBoardWrite {
   mutationId: number;
   kind: BoardWriteKind | null;
@@ -423,7 +449,8 @@ function boardWriteVars(mutation: { state: { variables?: unknown } }): {
 
 /**
  * Every board write against `repo` that is currently in flight, one entry per
- * INVOCATION — the observer-independent reading the panel's gates and strip need.
+ * INVOCATION — the observer-independent reading the panel's gates and write
+ * indicator need.
  *
  * `getSnapshot` COMPUTES from the cache rather than returning a value some
  * subscription last wrote, which is the whole point of doing this by hand instead of
@@ -432,9 +459,9 @@ function boardWriteVars(mutation: { state: { variables?: unknown } }): {
  * blind spot it never reconciles: this panel lives under `<Activity>`, which tears
  * passive effects down on hide, and a write settling while the tab is away notifies
  * nobody. On show, re-subscribing re-reads the same untouched ref, React sees no
- * change, and the pre-hide list latches — holds and strip lines for writes that
- * finished minutes ago. `useMutationState` has the same blind spot for `repo`, which
- * reaches its filters through an options ref updated after render.
+ * change, and the pre-hide list latches — holds and indicator lines for writes
+ * that finished minutes ago. `useMutationState` has the same blind spot for
+ * `repo`, which reaches its filters through an options ref updated after render.
  *
  * Computing on demand makes both moot: React calls this on every render and again
  * when it re-subscribes, and each call reads the live cache under the CURRENT
@@ -495,6 +522,10 @@ export function usePendingBoardWrites(repo: string): PendingBoardWrite[] {
  *
  * `repo` rides the call-time mutation variables at every wrap site, never a hook's
  * render scope — the same rule the writes' own targets follow.
+ *
+ * The `finally` is also every board write's SETTLE for the recovery scheduler: it
+ * re-bases an armed re-read unconditionally, succeeded or failed, since either may
+ * have committed server-side and opened a fresh replica window.
  */
 async function trackBoardWrite<T>(
   repo: string,
@@ -507,6 +538,7 @@ async function trackBoardWrite<T>(
     const left = (pendingBoardWrites.get(repo) ?? 1) - 1;
     if (left > 0) pendingBoardWrites.set(repo, left);
     else pendingBoardWrites.delete(repo);
+    rebaseOwedReread(repo);
   }
 }
 
@@ -652,7 +684,95 @@ function writeThroughBoards(
       predicate: (query) =>
         query.state.status === "pending" && query.state.fetchStatus === "idle",
     });
+    // A lens OWED a re-read that this write's cancel left with nothing running
+    // (a reposition landing during a cell save's refresh) would otherwise wait for
+    // an unrelated focus or staleTime read. Lenses that owe nothing keep the
+    // no-refetch settle.
+    if (
+      queryClient
+        .getQueryCache()
+        .findAll({ queryKey: projectItemsRepoKey(repo), type: "active" })
+        .some(owedIdle)
+    )
+      scheduleOwedReread(queryClient, repo);
   });
+}
+
+/** An owed lens with no read running. */
+const owedIdle = (query: Query) =>
+  boardReadOwed(query.queryHash) && query.state.fetchStatus === "idle";
+
+/** The one armed recovery re-read per repo, so settles can't pile timers up.
+ *  `full` is sticky across re-arms: once any settle has asked for a whole re-read,
+ *  the timer that finally fires performs one. */
+const owedRereadTimers = new Map<
+  string,
+  {
+    timer: ReturnType<typeof setTimeout>;
+    full: boolean;
+    queryClient: QueryClient;
+  }
+>();
+
+/**
+ * The file's ONE recovery scheduler. Re-reads a repo's boards once they are
+ * QUIET, past the replica window of the LATEST write that settled — so the read
+ * can't bring back an order a reposition just wrote. Each call re-arms (never
+ * stacks) the one timer, so it always counts from the latest settle — and while a
+ * timer is armed, EVERY board write's settle re-bases it ({@link rebaseOwedReread}),
+ * including a write that owes nothing and so would never arm one. At FIRE time
+ * a write still pending or a reposition still chasing its cache defers it again: a
+ * read landing then would overwrite that write's optimistic patch, and a chase
+ * would write the clobbered order back to GitHub.
+ *
+ * Two strengths. By default it refetches the OWED lenses with no read running (a
+ * cancel left them idle). `full` re-reads every board through
+ * {@link invalidateProjectBoards} — for a failed reposition, whose immediate
+ * re-read may have landed inside the replica window and CLEARED those lenses' debt
+ * with pre-write data, so owed-only would find nothing left to read.
+ */
+function scheduleOwedReread(
+  queryClient: QueryClient,
+  repo: string,
+  full = false,
+): void {
+  const armed = owedRereadTimers.get(repo);
+  if (armed !== undefined) clearTimeout(armed.timer);
+  const wantFull = full || (armed?.full ?? false);
+  owedRereadTimers.set(repo, {
+    full: wantFull,
+    queryClient,
+    timer: setTimeout(() => {
+      owedRereadTimers.delete(repo);
+      const busy =
+        (pendingBoardWrites.get(repo) ?? 0) > 0 ||
+        [...reorderingBoards.keys()].some(
+          (key) => (JSON.parse(key) as unknown[])[0] === repo,
+        );
+      if (busy) {
+        scheduleOwedReread(queryClient, repo, wantFull);
+        return;
+      }
+      if (wantFull) {
+        invalidateProjectBoards(queryClient, repo);
+        return;
+      }
+      void queryClient.refetchQueries({
+        queryKey: projectItemsRepoKey(repo),
+        type: "active",
+        predicate: owedIdle,
+      });
+    }, REPLICA_LAG_MS),
+  });
+}
+
+/** Push an ARMED recovery re-read to a full lag margin past now, keeping its
+ *  strength; arms nothing. A write settling inside the window of an older deadline
+ *  isn't pending at fire time, so only this keeps the read out of its window. */
+function rebaseOwedReread(repo: string): void {
+  const armed = owedRereadTimers.get(repo);
+  if (armed !== undefined)
+    scheduleOwedReread(armed.queryClient, repo, armed.full);
 }
 
 /** One board's items under one LENS, paged. Keyed on the board, the saved view's
@@ -675,23 +795,73 @@ export function useProjectItems(
   query: string | null,
   enabled: boolean,
   includeArchived: boolean,
+  /** Read the connection-valued fields too — for a surface that draws them. */
+  rich: boolean,
 ) {
   return useInfiniteQuery({
-    queryKey: projectItemsKey(repo, projectId, query, includeArchived),
+    queryKey: projectItemsKey(repo, projectId, query, includeArchived, rich),
     queryFn: ({ pageParam }) =>
-      api.ghProjectItems(repo, projectId, pageParam, query, includeArchived),
+      api.ghProjectItems(
+        repo,
+        projectId,
+        pageParam,
+        query,
+        includeArchived,
+        rich,
+      ),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => (last.truncated ? last.endCursor : null),
     enabled,
     staleTime: 60_000,
     retry: false,
     // The board is a placeholder axis (index 3 in the key literal above); the filter
-    // at index 4 and the archived state at index 5 deliberately are not. Switching
-    // views, or showing archived cards, keeps the previous lens's cards on screen
-    // while the new read lands, where switching BOARDS must never show another's.
+    // at index 4, the archived state at index 5 and the richness at index 6
+    // deliberately are not. Switching views, showing archived cards, or moving
+    // between a board and a table keeps the previous read's cards on screen while
+    // the new one lands, where switching BOARDS must never show another's.
     placeholderData: keepPreviousDataForKeyAxes(repo, [[3, projectId]]),
   });
 }
+
+/**
+ * Whether a board re-read that a WRITE asked for is still running on this repo —
+ * the tail between a write settling and the board repainting with what GitHub now
+ * holds. Counted at the one place a write asks for a re-read
+ * ({@link invalidateProjectBoards}), not off query state: `isInvalidated` is also
+ * set by the app's window-focus invalidation, so a mere focus would read as a
+ * write's tail. A write that settles through its own payload (a reposition, a
+ * restore) asks for no re-read and so has no tail.
+ */
+export function useBoardRereading(repo: string): boolean {
+  return useSyncExternalStore(
+    subscribeBoardRereads,
+    () => boardRereadsRunning(repo),
+    () => boardRereadsRunning(repo),
+  );
+}
+
+/** Where THIS lens's last write-asked re-read stands, when it hasn't yet shown
+ *  the write's result: `"owed"` not yet reconciled (reading, paused offline, or
+ *  never refetched), `"failed"` settled in error. Null once a read of the lens has succeeded since. */
+export function useBoardRereadStall(
+  repo: string,
+  projectId: string,
+  query: string | null,
+  includeArchived: boolean,
+  rich: boolean,
+): "owed" | "failed" | null {
+  const hash = hashKey(
+    projectItemsKey(repo, projectId, query, includeArchived, rich),
+  );
+  const read = () =>
+    boardReadOwed(hash) ? "owed" : boardReadFailed(hash) ? "failed" : null;
+  return useSyncExternalStore(subscribeBoardRereads, read, read);
+}
+
+/** A margin past how long GitHub's item reads can lag its own writes — measured
+ *  at ~6s both directions (PR #384's drive), so the re-read waits 8. A re-read
+ *  fired inside that window can return the pre-write order and stamp it fresh. */
+const REPLICA_LAG_MS = 8_000;
 
 /** One board's SAVED VIEWS — the lenses the switcher offers. Board state like the
  *  field definitions, so the same options: no lens, no item, `retry: false`
@@ -1005,6 +1175,8 @@ export function useMoveBoardCard() {
       /** Whether that lens was drawing archived cards — the other half of the key,
        *  for the reason `query` is a variable rather than a render read. */
       archived: boolean;
+      /** Whether that lens was the rich read — its key's last axis. */
+      rich: boolean;
     }) =>
       trackBoardWrite(args.repo, () =>
         api.ghSetItemFieldValues(
@@ -1026,6 +1198,7 @@ export function useMoveBoardCard() {
         args.projectId,
         args.query,
         args.archived,
+        args.rich,
       );
       const railKey = itemFieldValuesFamilyKey(args.repo);
       await queryClient.cancelQueries({ queryKey: key });
@@ -1104,6 +1277,7 @@ const reorderFoldKey = (args: {
   projectId: string;
   query: string | null;
   archived: boolean;
+  rich: boolean;
   itemId: string;
 }) =>
   JSON.stringify([
@@ -1111,6 +1285,7 @@ const reorderFoldKey = (args: {
     args.projectId,
     args.query,
     args.archived,
+    args.rich,
     args.itemId,
   ]);
 
@@ -1182,6 +1357,7 @@ type ReorderOutcome =
  * tree snapshot, which would revert a concurrent write to a sibling card and drop a
  * `Load more` page that landed mid-flight.
  */
+
 export function useReorderBoardCard() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -1202,6 +1378,8 @@ export function useReorderBoardCard() {
        *  not a legal position anchor), so this is false in practice; it rides the
        *  variables anyway, since the key is built from them and nothing else. */
       archived: boolean;
+      /** Whether that lens was the rich read — its key's last axis. */
+      rich: boolean;
     }): Promise<ReorderOutcome> => {
       const fold = reorderFoldKey(args);
       // Folded into the write already chasing THIS cache: its own loop below picks
@@ -1219,6 +1397,7 @@ export function useReorderBoardCard() {
           args.projectId,
           args.query,
           args.archived,
+          args.rich,
         );
         let afterId = args.afterId;
         const write = () =>
@@ -1314,6 +1493,7 @@ export function useReorderBoardCard() {
         args.projectId,
         args.query,
         args.archived,
+        args.rich,
       );
       await queryClient.cancelQueries({ queryKey: key });
       const before = boardPredecessorId(
@@ -1358,6 +1538,7 @@ export function useReorderBoardCard() {
       // had rather than a reading of what it has.
       if (e !== null || outcome === undefined) {
         invalidateProjectBoards(queryClient, ctx.repo);
+        scheduleOwedReread(queryClient, ctx.repo, true);
         return;
       }
       switch (outcome.kind) {
@@ -1372,6 +1553,8 @@ export function useReorderBoardCard() {
         case "exhausted":
           if (outcome.error !== undefined) toastError(outcome.error);
           invalidateProjectBoards(queryClient, ctx.repo);
+          if (outcome.error !== undefined)
+            scheduleOwedReread(queryClient, ctx.repo, true);
           return;
         // Board-wide: the payload describes the PROJECT's order, which every cached
         // lens of this board is a subsequence of. No rail family — a reposition
@@ -1831,10 +2014,12 @@ export function useRestoreBoardItem() {
       const owed: QueryKey[] = [];
       // The card as it will read once this lands, kept for the settle: the LIVE-ONLY
       // lenses are the ones that will need it inserted, and by then the only copy of
-      // it left in this repo may be the one taken here. Off the first lens that draws
-      // it: every lens holds the same membership, and a staler snapshot reconciles on
-      // the board's next natural read like anything else.
+      // it left in this repo may be the one taken here. Every lens holds the same
+      // membership, so any copy will do — but a RICH lens's copy wins over a lean
+      // one: it is safe in a lean cache, where the lean copy inserted into a rich
+      // one would blank that table's connection-valued cells.
       let restored: BoardItem | undefined;
+      let restoredRich = false;
       for (const [key, data] of queryClient.getQueriesData<
         InfiniteData<BoardItems, string | null>
       >({ queryKey })) {
@@ -1842,7 +2027,10 @@ export function useRestoreBoardItem() {
           owed.push(key);
         const at = findBoardItem(data, args.itemId);
         if (at === null) continue;
-        restored ??= { ...at.item, isArchived: false };
+        if (restored === undefined || (!restoredRich && keyIsRich(key))) {
+          restored = { ...at.item, isArchived: false };
+          restoredRich = keyIsRich(key);
+        }
         flipped.push(key);
         queryClient.setQueryData<InfiniteData<BoardItems, string | null>>(
           key,
@@ -2071,9 +2259,10 @@ export function useBulkRestoreBoardItems() {
       const flipped: { key: QueryKey; itemIds: string[] }[] = [];
       const owed: QueryKey[] = [];
       // Each card as it will read once this lands, kept for the settle's insert
-      // onto the live-only lenses. Off the first lens that draws it, the rule the
-      // single-card hook keeps: every lens holds the same membership.
+      // onto the live-only lenses — a rich lens's copy winning, the single-card
+      // hook's rule and reason.
       const restored = new Map<string, BoardItem>();
+      const restoredRich = new Set<string>();
       for (const [key, data] of queryClient.getQueriesData<
         InfiniteData<BoardItems, string | null>
       >({ queryKey })) {
@@ -2084,8 +2273,13 @@ export function useBulkRestoreBoardItems() {
           const at = findBoardItem(data, itemId);
           if (at === null) continue;
           drawn.push(itemId);
-          if (!restored.has(itemId))
+          if (
+            !restored.has(itemId) ||
+            (!restoredRich.has(itemId) && keyIsRich(key))
+          ) {
             restored.set(itemId, { ...at.item, isArchived: false });
+            if (keyIsRich(key)) restoredRich.add(itemId);
+          }
         }
         if (drawn.length === 0) continue;
         flipped.push({ key, itemIds: drawn });
@@ -2198,6 +2392,8 @@ export function useBulkMoveBoardCards() {
       query: string | null;
       /** Whether that lens was drawing archived cards — the other half of the key. */
       archived: boolean;
+      /** Whether that lens was the rich read — its key's last axis. */
+      rich: boolean;
     }) =>
       trackBoardWrite(args.repo, () =>
         api.ghSetItemsFieldValues(
@@ -2214,6 +2410,7 @@ export function useBulkMoveBoardCards() {
         args.projectId,
         args.query,
         args.archived,
+        args.rich,
       );
       const railKey = itemFieldValuesFamilyKey(args.repo);
       await queryClient.cancelQueries({ queryKey: key });
@@ -2347,12 +2544,12 @@ export function useAddExistingToBoard() {
       repo: string;
       projectId: string;
       contentId: string;
-      /** The item's number, for the board's pending strip alone — the write
+      /** The item's number, for the toolbar's write indicator alone — the write
        *  addresses the content id. Carried as a variable rather than looked up
-       *  later because the strip reads `variables` off the in-flight mutation, and
-       *  the search result it came from lives in a dialog that may be closed by
-       *  then. (The same display-only shape {@link useSetIssueMilestone}'s `title`
-       *  keeps.) */
+       *  later because the indicator reads `variables` off the in-flight mutation,
+       *  and the search result it came from lives in a dialog that may be closed
+       *  by then. (The same display-only shape {@link useSetIssueMilestone}'s
+       *  `title` keeps.) */
       number: number;
     }) =>
       trackBoardWrite(args.repo, () =>
@@ -2379,8 +2576,9 @@ export function useAddExistingToBoard() {
  *
  * `draftId` is the DRAFT's own content id, which is the id the write addresses;
  * `itemId` rides alongside for the board's own use — the card the patch lands on,
- * the card the panel marks busy, and the write's line in the pending strip — the
- * same display-only shape {@link useAddExistingToBoard}'s `number` keeps.
+ * the card the panel marks busy, and the write's line in the toolbar's write
+ * indicator — the same display-only shape {@link useAddExistingToBoard}'s `number`
+ * keeps.
  *
  * `assigneeLogins` is tri-state, the contract {@link api.ghUpdateDraftItem} states: a
  * list replaces the set, `[]` clears it, and `undefined` leaves it alone. Callers send

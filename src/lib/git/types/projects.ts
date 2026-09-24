@@ -40,10 +40,10 @@ export interface ProjectItemRemove {
 }
 
 /** One project field's value on an item, tagged by the field's kind. `isIssueField`
- *  marks a value GitHub owns on the issue/PR itself (assignees, labels, milestone,
- *  …) rather than a board-defined field — it rides the wire for the editor, which
- *  can't write those here. A kind this build doesn't know arrives as `unknown`,
- *  carrying only the name it was given. */
+ *  marks a value of an organization ISSUE field, owned on the issue itself and
+ *  bridged onto the board, rather than a board-defined field — it rides the wire for
+ *  the editor, which can't write those here. A kind this build doesn't know arrives
+ *  as `unknown`, carrying only the name it was given. */
 export type ProjectFieldValue =
   | {
       kind: "singleSelect";
@@ -98,7 +98,63 @@ export type ProjectFieldValue =
       duration: number;
       isIssueField: boolean;
     }
+  | {
+      kind: "users";
+      fieldId: string;
+      fieldName: string;
+      totalCount: number;
+      users: AssigneeRef[];
+      isIssueField: boolean;
+    }
+  | {
+      kind: "labels";
+      fieldId: string;
+      fieldName: string;
+      totalCount: number;
+      labels: LabelLite[];
+      isIssueField: boolean;
+    }
+  | {
+      kind: "milestone";
+      fieldId: string;
+      fieldName: string;
+      title: string;
+      isIssueField: boolean;
+    }
+  | {
+      kind: "repository";
+      fieldId: string;
+      fieldName: string;
+      nameWithOwner: string;
+      isIssueField: boolean;
+    }
+  | {
+      kind: "reviewers";
+      fieldId: string;
+      fieldName: string;
+      totalCount: number;
+      reviewers: string[];
+      isIssueField: boolean;
+    }
+  | {
+      kind: "pullRequests";
+      fieldId: string;
+      fieldName: string;
+      totalCount: number;
+      pullRequests: LinkedPrLite[];
+      isIssueField: boolean;
+    }
   | { kind: "unknown"; fieldName: string };
+
+export interface LabelLite {
+  name: string;
+  color: string;
+}
+
+export interface LinkedPrLite {
+  number: number;
+  repoNameWithOwner: string;
+}
 
 /** One board's field values for an item. `itemId` addresses the membership the
  *  values hang off, which is what a write would target. */
@@ -198,6 +254,7 @@ export interface ProjectViewDef {
   name: string;
   layout: "board" | "table" | "roadmap" | "unknown";
   filter: string | null;
+  groupFieldIds: string[];
   verticalGroupFieldIds: string[];
   sortBy: ProjectViewSort[];
   visibleFieldIds: string[];

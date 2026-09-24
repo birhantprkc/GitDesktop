@@ -35,6 +35,11 @@ import {
 } from "@/lib/use-disabled-reason";
 import { useSeedOnOpen } from "@/lib/use-seed-on-open";
 import { cn } from "@/lib/utils";
+import {
+  ALREADY_DRAWN_REASON,
+  type ItemNoun,
+  NOTES_PLACEHOLDER,
+} from "./board-model";
 
 /** Long enough that a word typed at speed makes one search, short enough that the
  *  list feels live. The Explore and registry searches sit either side of it. */
@@ -190,10 +195,9 @@ function CandidateRow({
 }
 
 /** The draft dialog's single-flight hold, in the board's own "Finishing…" register
- *  so the footer and the pending strip behind it name the same wait. */
+ *  so the footer and the toolbar's write indicator behind it name the same wait. */
 const DRAFT_PENDING_REASON = "Finishing your last draft…";
 
-const ON_BOARD_REASON = "Already on this board";
 const ADDED_REASON = "Added";
 /** The row the user actually clicked, from the click itself until the write
  *  settles. Its sibling names the hold the OTHER rows take meanwhile, which is a
@@ -213,6 +217,7 @@ export function AddExistingItemsDialog({
   repoPath,
   projectTitle,
   lens,
+  noun,
   open,
   onOpenChange,
   onBoardContentIds,
@@ -222,6 +227,8 @@ export function AddExistingItemsDialog({
   /** The board's title, for this dialog's own copy — never an id in user-facing
    *  text. The add's toast is the panel's, which owns the write. */
   projectTitle: string;
+  /** What the item is called where the dialog opened: a board card or a table row. */
+  noun: ItemNoun;
   /** The fork/upstream lens the board was read under: which repo "this" is. */
   lens: RemoteLens;
   open: boolean;
@@ -308,7 +315,7 @@ export function AddExistingItemsDialog({
       case added.has(candidate.id):
         return ADDED_REASON;
       case onBoardContentIds.has(candidate.id):
-        return ON_BOARD_REASON;
+        return ALREADY_DRAWN_REASON[noun];
       case pendingId === candidate.id:
         return ADDING_REASON;
       case pendingId !== null:
@@ -454,17 +461,20 @@ export function AddExistingItemsDialog({
 
 /**
  * A new DRAFT item: a note that lives on this board alone, with no issue behind it.
- * The body rides to GitHub as Markdown verbatim — the card's popover renders it as
- * such, so anything typed here survives the round trip.
+ * The body rides to GitHub as Markdown verbatim — the card's popover or the row's
+ * details renders it as such, so anything typed here survives the round trip.
  */
 export function NewDraftDialog({
   projectTitle,
+  noun,
   open,
   pending,
   onOpenChange,
   onCreate,
 }: {
   projectTitle: string;
+  /** What the item is called where the dialog opened: a board card or a table row. */
+  noun: ItemNoun;
   open: boolean;
   /** A draft write is in flight for this repo's boards — from THIS run or an
    *  earlier one the user closed over. Repo-level rather than per-board because the
@@ -479,7 +489,7 @@ export function NewDraftDialog({
    *  knows whether this run is still the one on screen. Resolves when the write
    *  settles either way; `onSubmit` awaits it, which drives the submit button's own
    *  spinner — the in-place feedback for the window where this dialog covers the
-   *  board's strip. */
+   *  toolbar's write indicator. */
   onCreate: (title: string, body: string) => Promise<void>;
 }) {
   const form = useAppForm({
@@ -492,9 +502,10 @@ export function NewDraftDialog({
     onSubmit: ({ value }) => onCreate(value.title.trim(), value.body),
   });
   // Held rather than hidden, and explained where the user is looking. The reason is
-  // the board's own "Finishing…" register, so the footer and the strip behind the
-  // dialog describe the same wait. The submit chord's hint rides the same wrapper,
-  // which is what keeps the reason from being overwritten by it while held.
+  // the board's own "Finishing…" register, so the footer and the toolbar's write
+  // indicator behind the dialog describe the same wait. The submit chord's hint
+  // rides the same wrapper, which is what keeps the reason from being overwritten
+  // by it while held.
   const { blockedReason, reasonId, wrapperTitle, describedBy } =
     useDisabledReason({
       disabled: pending,
@@ -538,7 +549,7 @@ export function NewDraftDialog({
             <DialogTitle>New draft</DialogTitle>
             <DialogDescription>
               A note that lives on {projectTitle} alone. Convert it to an issue
-              from the card's menu whenever it earns one.
+              from the {noun}'s menu whenever it earns one.
             </DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
@@ -554,7 +565,7 @@ export function NewDraftDialog({
               {(field) => (
                 <field.MarkdownField
                   label="Notes"
-                  placeholder="Markdown, rendered on the card"
+                  placeholder={NOTES_PLACEHOLDER[noun]}
                   rows={8}
                   textareaClassName="max-h-72 min-h-24 resize-y font-mono"
                 />
