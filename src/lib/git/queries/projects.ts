@@ -15,6 +15,7 @@ import { useCallback, useRef, useSyncExternalStore } from "react";
 import { toastError, toastErrorWithNote } from "@/lib/toast";
 import * as api from "../api";
 import type {
+  AssigneeRef,
   BoardItem,
   BoardItemContent,
   BoardItems,
@@ -28,6 +29,10 @@ import type {
   ProjectFieldValueUpdate,
   ProjectItemRemove,
   ProjectIterationDef,
+  ProjectStatusContent,
+  ProjectStatusUpdate,
+  ProjectStatusUpdates,
+  ProjectStatusValue,
   ProjectV2Ref,
   RemoteLens,
 } from "../types";
@@ -51,6 +56,13 @@ import {
   projectItemsRepoKey,
   subscribeBoardRereads,
 } from "./internal";
+import {
+  dropStatusUpdate,
+  insertNewestFirst,
+  mayPatchStatusCache,
+  prependStatusUpdate,
+  replaceStatusUpdate,
+} from "./project-status-cache";
 
 /** The GitHub Projects (v2) boards an item could join — repo-level plus the
  *  owner's. `retry: false` because the common failure is a missing `project`
@@ -337,6 +349,13 @@ function withBoardCount(
  *  {@link projectItemsKey} states. */
 const projectViewsKey = (repo: string, projectId: string) =>
   ["repo", repo, "project-views", projectId] as const;
+
+/** One project's status updates. Repo + project and no account axis, the family
+ *  contract {@link projectItemsKey} states. A family of its OWN: status updates
+ *  are independent of item state, so no board write touches this key, and the
+ *  status writes below touch nothing else. */
+const projectStatusUpdatesKey = (repo: string, projectId: string) =>
+  ["repo", repo, "project-status-updates", projectId] as const;
 
 /** Which board write a mutation IS. Rides its `mutationKey` so the panel can tell
  *  the kinds apart without holding a flag per hook. */
@@ -2762,5 +2781,250 @@ export function useSetItemFieldValues(
         invalidateProjectBoards(queryClient, repo);
         return queryClient.invalidateQueries({ queryKey: fieldsKey });
       }),
+  });
+}
+
+/** One project's status updates, newest first — the first page GitHub answers
+ *  with. No placeholder axis: switching projects must never show another
+ *  project's health. `retry: false` for the reason the rest of the Projects family
+ *  gives, the common failure being a missing `project` scope. */
+export function useProjectStatusUpdates(
+  repo: string,
+  projectId: string,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: projectStatusUpdatesKey(repo, projectId),
+    queryFn: () => api.ghProjectStatusUpdates(repo, projectId),
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
+/** The prefix a placeholder status update's id carries between a post and its
+ *  answer. Nothing may address one on GitHub, so a reader holds its Edit and
+ *  Delete until the real id replaces it. */
+const OPTIMISTIC_STATUS_PREFIX = "optimistic:";
+let optimisticStatusSeq = 0;
+
+/** Whether `update` is a post still waiting on GitHub's answer. */
+export function isOptimisticStatusUpdate(update: ProjectStatusUpdate): boolean {
+  return update.id.startsWith(OPTIMISTIC_STATUS_PREFIX);
+}
+
+/** What every status write addresses: the repo it runs from and the project whose
+ *  cache it patches. Call-time VARIABLES rather than hook scope, as the board writes
+ *  keep them, so a repo switch mid-flight can't retarget the write or its patch. */
+interface StatusWriteScope {
+  repo: string;
+  projectId: string;
+}
+
+/** The key every status write carries. Its own prefix, never under `board-write`:
+ *  {@link usePendingBoardWrites} enumerates that prefix, and would start counting
+ *  these. Which repo and project a write addresses rides its VARIABLES, for the
+ *  reason {@link boardWriteKey} gives. */
+const STATUS_WRITE_KEY = ["project-status-write"] as const;
+
+/** Whether a mutation's variables address `scope`. The filter sees
+ *  `Mutation<any>`, so the fields are `typeof`-guarded rather than asserted. */
+function writesScope(
+  mutation: { state: { variables?: unknown } },
+  scope: StatusWriteScope,
+): boolean {
+  const vars = mutation.state.variables;
+  if (typeof vars !== "object" || vars === null) return false;
+  const { repo, projectId } = vars as Record<string, unknown>;
+  return repo === scope.repo && projectId === scope.projectId;
+}
+
+/** Settles a status write by re-reading the project's updates — but only from the
+ *  LAST write still pending on that project. A re-read landing while a sibling
+ *  write is out answers from before it, clobbering that write's patch until its own
+ *  settle; the sibling's settle re-reads for both. `> 1` because query-core awaits
+ *  `options.onSettled` BEFORE dispatching the settle (5.102.8 mutation.js
+ *  :109/:132), so the write calling this still counts as pending. The status
+ *  hooks' callbacks stay SYNCHRONOUS: each IPC reply settles in its own task
+ *  today, and an awaited callback could let two settles share a checkpoint,
+ *  each counting the other, so that both skip. */
+function settleStatusUpdates(queryClient: QueryClient, args: StatusWriteScope) {
+  const pending = queryClient.isMutating({
+    mutationKey: STATUS_WRITE_KEY,
+    predicate: (mutation) => writesScope(mutation, args),
+  });
+  if (pending > 1) return;
+  void queryClient.invalidateQueries({
+    queryKey: projectStatusUpdatesKey(args.repo, args.projectId),
+  });
+}
+
+/**
+ * Posts a status update, OPTIMISTIC: a placeholder entry leads the history at
+ * once, and GitHub's answer replaces it — the real id is what makes Edit and
+ * Delete reachable. A failure takes the placeholder back out of whatever the cache
+ * holds by then, never a snapshot of the whole list, so a concurrent edit or
+ * delete of another entry survives the rollback.
+ *
+ * Reporting is the hook's, never the caller's `mutate` options: the dialog that
+ * fires this can be closed over the write, and react-query drops mutate-scoped
+ * callbacks once the observer loses its listeners.
+ */
+export function useCreateProjectStatusUpdate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: STATUS_WRITE_KEY,
+    mutationFn: (
+      args: StatusWriteScope & {
+        status: ProjectStatusValue;
+        content: ProjectStatusContent;
+        /** Who the placeholder names — the signed-in account, when known. */
+        creator: AssigneeRef | null;
+      },
+    ) =>
+      api.ghCreateProjectStatusUpdate(
+        args.repo,
+        args.projectId,
+        args.status,
+        args.content,
+      ),
+    onMutate: async (args) => {
+      const key = projectStatusUpdatesKey(args.repo, args.projectId);
+      await queryClient.cancelQueries({ queryKey: key });
+      optimisticStatusSeq += 1;
+      const placeholder: ProjectStatusUpdate = {
+        id: `${OPTIMISTIC_STATUS_PREFIX}${optimisticStatusSeq}`,
+        status: args.status,
+        ...args.content,
+        creator: args.creator,
+        createdAt: new Date().toISOString(),
+        updatedAt: null,
+      };
+      if (mayPatchStatusCache(queryClient.getQueryState(key)))
+        queryClient.setQueryData<ProjectStatusUpdates>(key, (current) =>
+          prependStatusUpdate(current, placeholder),
+        );
+      return { placeholderId: placeholder.id };
+    },
+    onSuccess: (created, args, ctx) => {
+      queryClient.setQueryData<ProjectStatusUpdates>(
+        projectStatusUpdatesKey(args.repo, args.projectId),
+        (current) => replaceStatusUpdate(current, ctx.placeholderId, created),
+      );
+    },
+    onError: (e, args, ctx) => {
+      const placeholderId = ctx?.placeholderId;
+      if (placeholderId !== undefined)
+        queryClient.setQueryData<ProjectStatusUpdates>(
+          projectStatusUpdatesKey(args.repo, args.projectId),
+          (current) => dropStatusUpdate(current, placeholderId),
+        );
+      toastError(e);
+    },
+    onSettled: (_d, _e, args) => settleStatusUpdates(queryClient, args),
+  });
+}
+
+/**
+ * Rewrites one status update WHOLE — every field rides, and null clears it (the
+ * contract {@link api.ghUpdateProjectStatusUpdate} states). OPTIMISTIC: the entry
+ * reads as edited at once, then as GitHub's answer; a failure puts back that ONE
+ * entry as it was, onto the current cache.
+ */
+export function useUpdateProjectStatusUpdate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: STATUS_WRITE_KEY,
+    mutationFn: (
+      args: StatusWriteScope & {
+        statusUpdateId: string;
+        status: string | null;
+        content: ProjectStatusContent;
+      },
+    ) =>
+      api.ghUpdateProjectStatusUpdate(
+        args.repo,
+        args.statusUpdateId,
+        args.status,
+        args.content,
+      ),
+    onMutate: async (args) => {
+      const key = projectStatusUpdatesKey(args.repo, args.projectId);
+      await queryClient.cancelQueries({ queryKey: key });
+      const prev = queryClient
+        .getQueryData<ProjectStatusUpdates>(key)
+        ?.updates.find((u) => u.id === args.statusUpdateId);
+      if (prev !== undefined)
+        queryClient.setQueryData<ProjectStatusUpdates>(key, (current) =>
+          replaceStatusUpdate(current, prev.id, {
+            ...prev,
+            status: args.status,
+            ...args.content,
+          }),
+        );
+      return { prev };
+    },
+    onSuccess: (updated, args) => {
+      queryClient.setQueryData<ProjectStatusUpdates>(
+        projectStatusUpdatesKey(args.repo, args.projectId),
+        (current) => replaceStatusUpdate(current, updated.id, updated),
+      );
+    },
+    onError: (e, args, ctx) => {
+      const prev = ctx?.prev;
+      if (prev !== undefined)
+        queryClient.setQueryData<ProjectStatusUpdates>(
+          projectStatusUpdatesKey(args.repo, args.projectId),
+          (current) => replaceStatusUpdate(current, prev.id, prev),
+        );
+      toastError(e);
+    },
+    onSettled: (_d, _e, args) => settleStatusUpdates(queryClient, args),
+  });
+}
+
+/**
+ * Deletes one status update. OPTIMISTIC: the entry leaves the history at once; a
+ * failure puts it back in its newest-first place among what the list holds by
+ * then, unless something else already restored it.
+ */
+export function useDeleteProjectStatusUpdate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: STATUS_WRITE_KEY,
+    mutationFn: (args: StatusWriteScope & { statusUpdateId: string }) =>
+      api.ghDeleteProjectStatusUpdate(args.repo, args.statusUpdateId),
+    onMutate: async (args) => {
+      const key = projectStatusUpdatesKey(args.repo, args.projectId);
+      await queryClient.cancelQueries({ queryKey: key });
+      const prev = queryClient
+        .getQueryData<ProjectStatusUpdates>(key)
+        ?.updates.find((u) => u.id === args.statusUpdateId);
+      queryClient.setQueryData<ProjectStatusUpdates>(key, (current) =>
+        dropStatusUpdate(current, args.statusUpdateId),
+      );
+      return { prev };
+    },
+    onError: (e, args, ctx) => {
+      const prev = ctx?.prev;
+      if (prev !== undefined)
+        queryClient.setQueryData<ProjectStatusUpdates>(
+          projectStatusUpdatesKey(args.repo, args.projectId),
+          (current) => {
+            if (
+              current === undefined ||
+              current.updates.some((u) => u.id === prev.id)
+            )
+              return current;
+            return {
+              ...current,
+              updates: insertNewestFirst(current.updates, prev),
+              totalCount: current.totalCount + 1,
+            };
+          },
+        );
+      toastError(e);
+    },
+    onSettled: (_d, _e, args) => settleStatusUpdates(queryClient, args),
   });
 }
