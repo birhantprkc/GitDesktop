@@ -16,7 +16,7 @@ import {
   XIcon,
 } from "@phosphor-icons/react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ElapsedTime } from "@/components/elapsed-time";
 import { ForgeUserAvatar } from "@/components/forge-user-avatar";
@@ -758,12 +758,16 @@ function NotificationRow({
   onDelete: () => void;
 }) {
   const Glyph = glyphFor(n);
+  const detailId = useId();
+  // A one-line failure's full text IS its subtitle, already in the accessible name.
+  const detail = n.detail !== n.subtitle ? n.detail : undefined;
 
   return (
     <div className="flex items-stretch not-last:border-b hover:bg-muted/60">
       <button
         type="button"
         data-row={n.id}
+        aria-describedby={detail ? detailId : undefined}
         onClick={onNavigate}
         onKeyDown={(e) => {
           if (e.key === "Delete" || e.key === "Backspace") {
@@ -795,7 +799,7 @@ function NotificationRow({
           {n.subtitle && (
             <span
               className="mt-0.5 block truncate text-[11px] text-muted-foreground"
-              title={n.subtitle}
+              title={detail ?? n.subtitle}
             >
               {n.subtitle}
             </span>
@@ -841,6 +845,13 @@ function NotificationRow({
           </span>
         )}
       </button>
+      {/* The full text is otherwise only in the subtitle's hover title, which
+          assistive tech never reads; aria-describedby resolves hidden targets. */}
+      {detail && (
+        <span id={detailId} hidden>
+          {detail}
+        </span>
+      )}
       {n.action && (
         <Button
           variant="ghost"

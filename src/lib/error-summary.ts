@@ -38,13 +38,23 @@ const KIND_LABELS: Record<AppError["kind"], string> = {
   timeout: "Timed out",
 };
 
+/** git's push header `To <remote>` (git 2.51.1.windows.1) opens its own report
+ *  (sideband `remote:` lines may precede it); the reason follows below. One
+ *  END-anchored token (scheme URL, scp, `host:path`), so spaced prose never
+ *  matches; accepted residual: a lone `word:token` line (`To do:x`) is skipped.
+ *  Windows drive-letter and `file://` remotes match too; POSIX, relative, UNC,
+ *  IPv6-scp, and space-containing paths don't, and keep line one. */
+const PUSH_TRANSFER_HEADER = /^To (?:[\w.-]+@)?[\w.+-]+:\S+$/;
+
 /** Lines that carry no signal for a one-line summary: git `hint:` guidance,
- *  `Rebasing (x/y)` progress counters, and blanks. */
+ *  `Rebasing (x/y)` progress counters, the push transfer header, and blanks.
+ *  Matched against the trimmed line, which also drops a CRLF joint's `\r`. */
 function isNoiseLine(line: string): boolean {
   const t = line.trim();
   if (t === "") return true;
   if (t.startsWith("hint:")) return true;
   if (/^Rebasing \(\d+\/\d+\)/.test(t)) return true;
+  if (PUSH_TRANSFER_HEADER.test(t)) return true;
   return false;
 }
 
@@ -55,14 +65,23 @@ function stripToolPrefix(line: string): string {
   return line.replace(/^(?:error|fatal|gh):\s*/i, "").trim();
 }
 
-/** First meaningful line of a message, prefix-stripped. Falls back to the first
- *  non-empty line (then the whole trimmed text) so a summary is never blank. */
+/** Collapse internal whitespace runs: git pads its per-ref columns
+ *  (`! [rejected]        main -> main`), which verbatim surfaces render as-is. */
+function collapseSpaces(line: string): string {
+  return line.replace(/\s+/g, " ");
+}
+
+/** First meaningful line of a message, prefix-stripped and space-collapsed. Falls
+ *  back to the first non-empty line (then the whole trimmed text) so a summary is
+ *  never blank. */
 function firstMeaningfulLine(message: string): string {
   const lines = message.split("\n");
   const meaningful = lines.find((l) => !isNoiseLine(l));
-  if (meaningful) return stripToolPrefix(meaningful);
+  if (meaningful) return collapseSpaces(stripToolPrefix(meaningful));
   const nonEmpty = lines.find((l) => l.trim() !== "");
-  return stripToolPrefix(nonEmpty ?? message).trim() || message.trim();
+  return collapseSpaces(
+    stripToolPrefix(nonEmpty ?? message).trim() || message.trim(),
+  );
 }
 
 /** Conflict-family markers — the FALLBACK classifier, for `git`-kind errors from
@@ -143,11 +162,11 @@ const DIRTY_TREE_MARKERS = [
 ];
 
 /** Force-push rejections whose reason git prints ONLY inside its per-ref
- *  `! [rejected]        main -> main (<reason>)` line — everything above and
- *  below that line is the remote URL and a generic "failed to push some refs",
- *  which is what a raw summary would otherwise show. Anchored to that line
- *  shape and matched case-sensitively, since the same blob echoes branch names
- *  and URLs. The leading space is optional: the Rust layer trims the whole
+ *  `! [rejected]        main -> main (<reason>)` line. When git's report leads
+ *  the message, the fall-through surfaces that line too; a mapped entry earns its
+ *  place by adding the ADVICE git's reason alone doesn't give. Anchored to that
+ *  line shape and matched case-sensitively, since the same blob echoes branch
+ *  names and URLs. The leading space is optional: the Rust layer trims the whole
  *  report, so the line loses its indent whenever nothing precedes it.
  *
  *  Only the two guarded-force reasons are mapped. A plain non-fast-forward
