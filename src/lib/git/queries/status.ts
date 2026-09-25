@@ -2,13 +2,21 @@ import { useQuery } from "@tanstack/react-query";
 import * as api from "../api";
 import { repoKeys } from "./core";
 
-export function useRepoStatus(repo: string) {
-  return useQuery({
+/** Shared so every observer of a repo's status key fetches under the same options:
+ *  the fetch takes them from whichever observer starts it. */
+export function repoStatusOptions(repo: string) {
+  return {
     queryKey: repoKeys.status(repo),
     queryFn: () => api.gitStatus(repo),
     // A local git read, so it must not park on the default "online" mode the way
     // a forge call does — gates that hold until this answers would never lift.
-    networkMode: "always",
+    networkMode: "always" as const,
+  };
+}
+
+export function useRepoStatus(repo: string) {
+  return useQuery({
+    ...repoStatusOptions(repo),
     refetchInterval: 5000,
     refetchIntervalInBackground: false,
   });
@@ -24,6 +32,7 @@ export function useWorkingLineStats(repo: string, enabled: boolean) {
     queryKey: [...repoKeys.status(repo), "line-stats"],
     queryFn: () => api.gitWorkingLineStats(repo),
     enabled,
+    networkMode: "always",
     refetchInterval: 5000,
     refetchIntervalInBackground: false,
   });
@@ -40,6 +49,7 @@ export function useUnpushedCount(repo: string, enabled: boolean) {
     queryFn: () => api.gitUnpushedCount(repo),
     enabled: enabled && Boolean(repo),
     staleTime: 10_000,
+    networkMode: "always",
   });
 }
 
@@ -54,5 +64,6 @@ export function useRepoOwners(paths: string[]) {
     // gcTime: Infinity — keep owners warm across popover opens so refreshes stay
     // instant (the stored owner on each RecentRepo is the primary anti-reflow path).
     gcTime: Number.POSITIVE_INFINITY,
+    networkMode: "always",
   });
 }

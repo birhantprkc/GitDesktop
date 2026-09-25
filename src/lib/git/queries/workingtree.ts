@@ -72,6 +72,9 @@ export function useFileDiff(
         file?.untracked ?? false,
       ),
     enabled: file !== null,
+    // Local reads must not park on react-query's default "online" mode offline;
+    // the same holds for every `networkMode` in this file.
+    networkMode: "always",
   });
 }
 
@@ -95,6 +98,7 @@ export function useSessionFileDiff(
     enabled: enabled && Boolean(repo && filePath && base),
     refetchInterval: enabled && live ? 1500 : false,
     refetchIntervalInBackground: false,
+    networkMode: "always",
   });
 }
 
@@ -104,11 +108,18 @@ export function useStage(repo: string) {
   });
 }
 
-export function useOpState(repo: string) {
-  return useQuery({
+/** Shared so every observer of a repo's op-state key fetches under the same
+ *  options: the fetch takes them from whichever observer starts it. */
+export function opStateOptions(repo: string) {
+  return {
     queryKey: repoKeys.opState(repo),
     queryFn: () => api.gitOpState(repo),
-  });
+    networkMode: "always" as const,
+  };
+}
+
+export function useOpState(repo: string) {
+  return useQuery(opStateOptions(repo));
 }
 
 export function useOpAbort(repo: string) {
@@ -126,6 +137,7 @@ export function useConflictFile(repo: string, path: string) {
     queryKey: ["repo", repo, "conflict-file", path] as const,
     queryFn: () => conflictSides(repo, path, []),
     retry: false,
+    networkMode: "always",
   });
 }
 
@@ -173,6 +185,7 @@ export function useFileAtRev(
     queryKey: ["repo", repo, "file-b64", rev ?? "worktree", file] as const,
     queryFn: () => api.gitFileBase64(repo, rev, file),
     enabled,
+    networkMode: "always",
   });
 }
 
@@ -301,6 +314,7 @@ export function useAiExcludedView(
     },
     enabled,
     staleTime: 30_000,
+    networkMode: "always",
   });
 }
 
@@ -319,6 +333,7 @@ export function useTrackedFiles(repo: string, enabled: boolean) {
     queryFn: () => api.gitListTracked(repo),
     enabled,
     staleTime: 30_000,
+    networkMode: "always",
   });
 }
 
@@ -335,6 +350,7 @@ export function useAgentCommands(
     queryFn: () => api.readAgentCommands(repo, agent),
     enabled,
     staleTime: 30_000,
+    networkMode: "always",
   });
 }
 
@@ -345,6 +361,7 @@ export function useIgnoredFiles(repo: string, enabled: boolean) {
     queryFn: () => api.gitIgnoredFiles(repo),
     enabled,
     staleTime: 30_000,
+    networkMode: "always",
   });
 }
 
