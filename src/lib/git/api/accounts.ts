@@ -2,6 +2,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { invoke } from "@/lib/tauri/invoke";
 import { COLD_START } from "@/lib/test-mode";
 import type {
+  BackgroundRepoStatus,
   BbAccountInfo,
   ForgeStatus,
   GhAccounts,
@@ -14,6 +15,12 @@ import type {
  *  hosted panels read for any provider. */
 export const forgeStatus = (repoPath: string) =>
   invoke<ForgeStatus>("forge_status", { repoPath });
+
+/** Background PR-sync readiness for many repos in one call, in input order —
+ *  GitHub auth for registered hosts is probed once per tick, not once per repo; a
+ *  repo on an unmapped host spelling takes a per-repo status probe instead. */
+export const forgeBackgroundStatuses = (paths: string[]) =>
+  invoke<BackgroundRepoStatus[]>("forge_background_statuses", { paths });
 
 // ── Bitbucket account (Atlassian API token) ──────────────────────────────────
 //
