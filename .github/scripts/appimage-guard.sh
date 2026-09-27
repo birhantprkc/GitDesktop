@@ -32,6 +32,7 @@ echo "OK: $(basename "$appimage") does not bundle libwayland-client"
 # NAME` and `declare -x` are out of scope (linuxdeploy emits single-line exports).
 allowed=" LD_LIBRARY_PATH PATH XDG_DATA_DIRS GTK_PATH"
 allowed="$allowed GST_PLUGIN_SYSTEM_PATH GST_PLUGIN_SYSTEM_PATH_1_0"
+allowed="$allowed GI_TYPELIB_PATH"
 allowed="$allowed GSETTINGS_SCHEMA_DIR GTK_EXE_PREFIX GTK_DATA_PREFIX"
 allowed="$allowed GTK_IM_MODULE_FILE GDK_PIXBUF_MODULE_FILE GIO_EXTRA_MODULES"
 allowed="$allowed APPDIR " # the hook's own re-export

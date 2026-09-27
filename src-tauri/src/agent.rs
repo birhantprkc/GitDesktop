@@ -242,8 +242,9 @@ impl EventSink for Channel<ReviewEvent> {
 // into the bundle, so any spawned HOST binary loads the bundle's Ubuntu 22.04
 // libraries and dies. Subtract per child only: never clear (SSH_AUTH_SOCK
 // inherits), never touch our own env (WebKit helpers, the dlopen'd tray). The
-// list/scalar split tracks Tauri's linuxdeploy-plugin-gtk fork, which appends
-// to the lists but overwrites the scalars; upstream's adds GI_TYPELIB_PATH.
+// list/scalar split tracks linuxdeploy-plugin-gtk (appends to the lists,
+// overwrites the scalars) — the build fetches that script rolling, so new
+// exports can appear in any build; appimage-guard.sh is the tripwire.
 
 /// `PATH`-style lists the bundle prepends itself to; `$APPDIR` entries are
 /// dropped and the variable is unset when nothing survives — except `PATH`,
@@ -256,6 +257,7 @@ const APPDIR_PATHLIST_VARS: &[&str] = &[
     "GTK_PATH",
     "GST_PLUGIN_SYSTEM_PATH",
     "GST_PLUGIN_SYSTEM_PATH_1_0",
+    "GI_TYPELIB_PATH",
 ];
 
 /// Single-path variables the bundle owns outright — unset when they point into
@@ -3216,6 +3218,10 @@ mod child_env_tests {
                 ("PATH", "/tmp/.mount_gdAbc/usr/bin:/usr/bin"),
                 ("XDG_DATA_DIRS", "/usr/share"),
                 (
+                    "GI_TYPELIB_PATH",
+                    "/tmp/.mount_gdAbc/usr/lib/girepository-1.0:/usr/lib/girepository-1.0",
+                ),
+                (
                     "GDK_PIXBUF_MODULE_FILE",
                     "/tmp/.mount_gdAbc/usr/lib/loaders.cache",
                 ),
@@ -3227,6 +3233,7 @@ mod child_env_tests {
             vec![
                 ("LD_LIBRARY_PATH", None),
                 ("PATH", Some("/usr/bin".to_string())),
+                ("GI_TYPELIB_PATH", Some("/usr/lib/girepository-1.0".to_string())),
                 ("GDK_PIXBUF_MODULE_FILE", None),
             ]
         );
