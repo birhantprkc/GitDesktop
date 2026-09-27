@@ -202,6 +202,11 @@ export const capabilities: Capability[] = [
   {
     group: "Pull requests & review",
     label:
+      "A failed PR create raises a notification — branch and reason named, even when it fails in the background",
+  },
+  {
+    group: "Pull requests & review",
+    label:
       "Link related issues as you open or edit a PR — auto-detected from your branch and commits (GitHub & GitLab; Bitbucket via linked Jira)",
   },
   {
@@ -263,6 +268,11 @@ export const capabilities: Capability[] = [
       "Triage the PR list — All | Mine | Needs review presets and whole-repo filters (GitHub & GitLab), with grouping by your review state (GitHub)",
     highlight: true,
   },
+  {
+    group: "Pull requests & review",
+    label:
+      "Refresh the PR list on demand — one press re-reads the list, its checks, conflict chips & review grouping",
+  },
 
   // — Forges & trackers —
   {
@@ -306,6 +316,11 @@ export const capabilities: Capability[] = [
   {
     group: "Issues & discussions",
     label: "GitHub & GitLab issues, plus private local to-dos",
+  },
+  {
+    group: "Issues & discussions",
+    label:
+      "Refresh the issue list on demand — forge, local & linked-Jira lists in one press",
   },
   {
     group: "Issues & discussions",
@@ -571,6 +586,11 @@ export const capabilities: Capability[] = [
     group: "Keyboard & Markdown",
     label:
       "Collapsible comment box — reclaim reading space, actions stay docked",
+  },
+  {
+    group: "Keyboard & Markdown",
+    label:
+      "Jump to either end of a long thread — scroll-aware buttons on PR, issue & discussion conversations",
   },
   {
     group: "Keyboard & Markdown",

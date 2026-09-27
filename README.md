@@ -311,8 +311,9 @@ in one click.
   projects…** and **Edit project fields…** in the command palette opening
   either popup, flip a PR between **draft and ready for review**
   either way on all three, and **create new PRs as drafts by default**
-  (Settings → General). A new PR is visible in the list it's headed for from
-  the moment you start creating it: a **pending entry** holds its place with
+  (Settings → General). Creating first checks the branch for an already-open
+  PR and offers the link instead of opening a duplicate. A new PR is visible
+  in the list it's headed for from the moment you start creating it: a **pending entry** holds its place with
   the title, branches and draft state, picks up the number as the PR opens,
   and hands over to the real row once the list catches up.
 - **Linked issues**: link related issues when you open *or* edit a PR, as
@@ -435,6 +436,10 @@ in one click.
   **teams**' review requests can join the filter. Your scope choice is
   remembered per repository, and a provider that can't express an axis says
   so in the funnel rather than offering a dead control.
+- **Refresh on demand**: a refresh button beside the list's search box (or
+  **Refresh pull requests** in the command palette) re-reads the list you're
+  looking at along with its checks, conflict chips, review-state grouping,
+  and your local pull requests.
 - **Fork · Upstream lens**: on a GitHub fork (a repo with an `upstream`
   remote), a **Fork | Upstream** switch in the list toolbar points the
   remote PR list, and every PR you open under it (description, comments,
@@ -546,7 +551,10 @@ parent repository's issues (creating one under the Upstream lens opens it
 switch to Upstream instead of a dead end. An **All | Mine** switch in the
 list toolbar scopes the list to the issues **assigned to you**, and the
 funnel at the right end of the row above narrows the whole repository's
-issues by **author** or **label** (GitHub & GitLab).
+issues by **author** or **label** (GitHub & GitLab). A refresh button beside
+the search box (or **Refresh issues** in the command palette) re-reads the
+forge list you're looking at, your local issues, and a linked Jira project's
+list in one press.
 
 **Activity feed**: an issue's timeline events interleave with its comments,
 date-sorted oldest-to-newest — labels, assignees, milestones, title renames,
@@ -1120,6 +1128,10 @@ review via its subscription login. The full list is under
   issues (local, on the forge, and Jira), discussions, and commits. Approve,
   Review, and Close stay on the strip, a saved draft shows its first line there,
   and the choice is remembered until you expand it again.
+- **Jump to either end of a thread**: long pull request, issue, and
+  discussion conversations get scroll-aware arrow buttons by the scrollbar
+  that take you to the top or the newest activity at the bottom, with
+  **Jump to the top / bottom of the thread** in the command palette.
 - **Keyboard-first**: rebindable shortcuts (single keys included) with
   GitHub-Desktop-compatible defaults, a generated cheat sheet (`Ctrl`/`⌘`+`/`),
   a command palette (`Ctrl`/`⌘`+`K`), a filterable shortcut list in Settings
@@ -1173,12 +1185,14 @@ review via its subscription login. The full list is under
   any executable, or set a full custom command with a `{path}` placeholder),
   and per-source notification controls that send each kind of event to the
   activity inbox, your desktop, both, or neither, with per-repository
-  overrides, CI sources that can narrow to just the failures (or just the
-  successes), and automation results that can narrow to failures only.
+  overrides, CI sources that can watch just your pull requests or every open
+  one and narrow to just the failures (or just the successes), and
+  automation results that can narrow to failures only.
 - **Activity and notifications**: a persistent bell in the header collects
   terminal events (a finished review, checks passing/failing, a PR
-  approved/commented/merged, a review requested from you, a completed CI
-  run, or a finished agent / research / plan run) into a clickable,
+  approved/commented/merged, a pull request that failed to create, a review
+  requested from you, a completed CI run, or a finished agent / research /
+  plan run) into a clickable,
   clearable history that survives a restart, so a review that finishes
   while you're away is never a missed click. Open it from the command
   palette; which events show follows your notification settings, where

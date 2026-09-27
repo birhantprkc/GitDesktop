@@ -85,8 +85,8 @@ an **Open Recent** list of your last ten repos, with **Settings…** in the
 Once a repo is open you land on the **Changes** tab. The header's tab rail holds the
 three primary views — **Changes**, **History**, and **Pull Requests** — and a
 **More ▾** menu holds the rest: **Compare**, {{ai}}**Agent**, {{/ai}}**Issues**,
-**Code TODOs**, **Discussions**, **Actions**, **Findings**, **Tags**, **Tasks**,
-and **Insights**. The More button shows the active secondary tab's name, so the
+**Projects**, **Code TODOs**, **Discussions**, **Actions**, **Findings**, **Tags**,
+**Tasks**, and **Insights**. The More button shows the active secondary tab's name, so the
 rail always says where you are.
 
 The lists those tabs open (changes, commits, pull requests) fill the **sidebar** down
@@ -3293,7 +3293,8 @@ configuration, one line per moment, then lists every recorded decision, newest f
 - **Skips are recorded too.** Each line names the action it belongs to and what came of it:
   posted as a comment, review saved, skipped because branch conditions didn't match, already
   reviewed, a draft while draft reviews are off, handed off to another review run, failed
-  (with the error), timed out, or cancelled. When a moment is switched off entirely, nothing is
+  (with the error), timed out, cancelled, or didn't settle (the app closed mid-run, or
+  another instance owns the run and will still post). When a moment is switched off entirely, nothing is
   recorded for it, and the configuration lines at the top say so.
 - **Repeats read as summaries.** A decision that recurred coalesces into one row with its
   count — "Skipped 23 commits — branch conditions didn't match" for a run of commits, or
