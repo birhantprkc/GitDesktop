@@ -52,6 +52,10 @@ const SAVING_REASON = "Saving…";
  * submit. The reasoned hold keeps the submit FOCUSABLE, the contract
  * BoardDraftEditDialog documents; the plain empty-field disable `SubmitButton`
  * ORs in stays a native one.
+ *
+ * Reasons stay under ~45 chars: at sm:max-w-lg the reason column is 291px of
+ * 11px type, and a longer one wraps the submit under Cancel (measured live
+ * 2026-09-27).
  */
 function HeldFooter({
   heldReason,
@@ -238,7 +242,8 @@ export function EditProjectDialog({
       const title = value.title.trim();
       const description = value.description.trim();
       if (title !== seedTitle) patch.title = title;
-      if (description !== seedDescription) patch.shortDescription = description;
+      if (description !== seedDescription.trim())
+        patch.shortDescription = description;
       return onSave(patch);
     },
   });
@@ -247,7 +252,13 @@ export function EditProjectDialog({
     form.store,
     (s) =>
       s.values.title.trim() === seedTitle &&
-      s.values.description.trim() === seedDescription,
+      s.values.description.trim() === seedDescription.trim(),
+  );
+  // GitHub keeps the old text for an emptied description, so a clear is held
+  // rather than sent as a write that reports success and changes nothing.
+  const clearing = useSelector(
+    form.store,
+    (s) => seedDescription.trim() !== "" && s.values.description.trim() === "",
   );
   useSeedOnOpen(open, () =>
     form.reset(
@@ -261,6 +272,8 @@ export function EditProjectDialog({
         return SAVING_REASON;
       case unchanged:
         return "Change the title or description to save";
+      case clearing:
+        return "Clear it on github.com, or restore it";
       default:
         return null;
     }
