@@ -189,17 +189,6 @@ For any **user-facing feature**, keep the docs in step in the same change:
 A truly minor feature can settle for just the capability line + changelog — but make
 that call on purpose.
 
-Writing a **blog post**? Post copy follows the anti-AI-tell rules in
-[CLAUDE.md](CLAUDE.md#blog-post-copy--anti-ai-tell-rules-sitesrccontentblog) —
-phrasing, wrap band, and voice; spelling and personal voice follow the post's
-byline author. To schedule a post, give it a future `pubDate` — prefer a bare
-date (midnight UTC): the post stays out of production builds, while remaining
-visible in dev and Pages previews, until the daily `site-scheduled-publish`
-cron (00:37 UTC nominal; precision is the day, not the hour) rebuilds the
-site. A time component doesn't pick an hour — the post appears on the first
-production build after its timestamp, whether that's the daily cron or an
-earlier push/release rebuild.
-
 ### UI changes
 
 GitDesktop is keyboard-first and aims for WCAG AA. When you add or change UI:
