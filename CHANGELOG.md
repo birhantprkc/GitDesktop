@@ -12,6 +12,425 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-27
+
+### Added
+
+- **Automation history and on-demand runs.** A new **Automation history** view
+  (activity bell footer, or the repository menu) records what each automation
+  did and why: reviews posted, heads skipped as already covered, branch
+  conditions that didn't match, heads handed off to another review run, and
+  runs the app closed on. Saved commit reviews open straight from their
+  Automation history row. **Run automations on this pull request** (command
+  palette) runs the configured reviews on demand for the open PR, confirming
+  the modes and the posted comment before it spends a model call.
+- **The Findings tab reads Bitbucket Code Insights.** On a Bitbucket repo the tab
+  now lists the reports published against your branch's tip commit (falling back to
+  the default branch, and saying so), a section per report with what it covers, its
+  reporter, its result (Passed, Failed, Pending, or Unspecified when the tool posted
+  none), its metrics, and its description. The report's annotations are the rows,
+  worst severity first, each with what it reports and the file and line it points
+  at; select one for its full text, and where the scanner attached a link, open the
+  advisory or rule page it points to. Anything already writing Code Insights from
+  your pipeline shows up here with no extra setup, and a commit with nothing
+  published says so instead of reading clean.
+- **Directory tree in the Changes panel.** See your files as a compacted
+  directory tree: folders collapse, single-child chains merge into one row, and
+  the flat list stays one toggle away, in the panel's filter row or the command
+  palette. Multi-select, keyboard navigation, and the Staged / Changes split are
+  available in both views, and collapsing a folder drops its hidden files from a
+  multi-selection.
+- **Refresh the issue list on demand.** A refresh button sits on the Issues toolbar
+  beside the search box, and *Refresh issues* in the command palette does the same: one
+  press re-reads the forge list you're looking at, your local issues, and a linked Jira
+  project's list.
+- **My work spans all three forges.** The cross-repo inbox now gathers your **GitLab**
+  merge requests and issues from every host you're signed in to, and your **Bitbucket**
+  pull requests from your recent repositories, alongside your GitHub work. Each row
+  carries the mark of the forge it came from, each forge loads on its own, and the ones
+  you haven't connected stay out of the list.
+- **Per-source notification controls.** Every kind of event carries its own pair
+  of checkboxes: a row in the activity inbox, a desktop ping, both, or neither.
+  Agent sessions, plans, and research join the list, CI checks choose whether
+  they watch just your pull requests or every open one, and **Notify on** narrows
+  the CI sources to successes and failures, failures only, or successes only,
+  and gives automation results a choice of everything or failures only.
+  **Customize…** (or the repository **⋮** menu's **Notifications…**) sets any of
+  it per repository, down to muting a whole repo in one click — and when the
+  repository can't be identified, the dialog offers **Retry** so your choices
+  always land on the right one.
+- **A new pull request holds its place in the list while it's being created.** The moment
+  you submit the Create dialog, a pending entry appears at the top of the list the PR is
+  headed for, carrying its title, its branches and its draft state. The number joins it as
+  the PR opens, and the entry keeps the place through list refreshes and filtered views
+  until the real row arrives and takes over. From the moment the number appears the entry
+  is a real row: click it, or reach it with the arrow keys, and the pull request opens.
+- **Re-run one CI job.** Failed rows in the pull request's checks rollup and in
+  the Actions run view carry their own re-run, offered on GitHub once the
+  job's run has finished and on GitLab as soon as the job fails. GitHub
+  restarts the job plus any jobs that depend on it; GitLab retries just that
+  one. One flaky job costs one click, not a batch.
+- **Re-run failed CI from a pull request.** One click on the checks rollup retries
+  the failed jobs (**Re-run failed jobs** on GitHub) or the pipeline's failed and
+  canceled jobs (**Retry pipeline** on GitLab), with no trip to the Actions tab.
+  The command palette carries it too, as **Re-run failed jobs / Retry pipeline**.
+- **Hear about a pull request that failed to open.** Every failed create now leaves
+  a record, including one that dies in the background after you've moved on, say
+  minutes into a long push: the activity inbox names the branch and the reason, and
+  clicking the row takes you to that repository's pull requests. A desktop
+  notification reaches you when the window is in the background. The new
+  **Creating a pull request fails** row in Settings → Notifications tunes both
+  channels, and per-repository settings and mutes apply to it like any other source.
+- **Filter pull requests and issues across the whole repository.** One click scopes
+  the list to **All**, **Mine**, or (on pull requests) **Needs review**, and the funnel
+  behind it asks GitHub or GitLab server-side for what's assigned to you, awaiting your
+  review, or matching an author or label. On GitHub the filter also covers your teams'
+  review requests, and **Needs review** splits the open list into **Not reviewed yet**,
+  **Updated since my review**, and **Reviewed**, so a review pass knows where to start.
+  Every scope is in the command palette, and the scope you pick is remembered per
+  repository. While the saved scope is still loading, the controls wait with
+  "Loading saved filters", and a change that can't be saved names the filters the
+  list falls back to.
+- **Refresh the pull request list on demand.** A refresh button sits on the Pulls toolbar
+  beside the search box, and *Refresh pull requests* in the command palette does the same:
+  it re-reads the list you're looking at along with its checks, conflict chips,
+  review-state grouping and your local pull requests. While a new pull request is still
+  holding its place, the list also chases the forge on its own, so the real row usually
+  arrives without a press.
+- **Set an issue or pull request's GitHub Projects fields without leaving it.** The
+  **Project fields** row is now a trigger: it opens one popup holding every field you can
+  set on every board the item is on (**Status**, **Priority**, **Iteration**, plus date,
+  text, number, and multi-select fields), filled in or not, and any that already holds a
+  value carries a **Clear** to empty it again. Like the Projects and Labels pickers, it
+  drafts your edits and writes them when it closes, one write per board. It works on
+  closed and merged pull requests too, so a card can still move to *Done* after the
+  merge. **Edit project fields…** in the command palette opens it without the mouse.
+  Your organization's issue fields are there too, and anywhere a board lets you edit a
+  field (its table cells, the bulk fields editor, a move between columns, the roadmap's
+  date keys) they set the value on the issue itself, so every board showing that field
+  agrees. GitHub only; a board's own fields use the same `project` sign-in scope the
+  Projects picker already needs.
+- **See where an issue or pull request stands on its GitHub Projects boards.** Under
+  the Projects chips, one line per board reads out that board's set fields: **Status**,
+  **Priority**, **Iteration** with the dates it covers, plus date, text, number, and
+  multi-select fields, each named beside its value. A board is named on its own line
+  once the item sits on more than one. GitHub only, and it uses the same `project` (or
+  `read:project`) sign-in scope the Projects picker already needs.
+- **Manage projects and saved views from the board.** Start a new GitHub
+  Project (linked to the repository whenever the repository can be read),
+  edit its title and description, close, reopen or delete it, and add,
+  rename, duplicate or delete saved views, pick the fields a view shows, and
+  save a layout you switched to back onto the view. Closed projects sit in
+  their own group of the project picker and stay fully workable.
+- **Project status updates.** See a GitHub Project's health at a glance and post
+  updates without leaving the app. Once a project has a status update, a strip above
+  its board shows the latest one: its status (**On track**, **At risk**, **Off
+  track**, **Complete** or **Inactive**), the first line of its note, the target date
+  and how long ago it was posted. Press the strip to fold out the history, newest
+  first, with each update's author, dates and Markdown note. **Add item → Post status
+  update…** (or the command palette) posts a new one: pick a status, then add a note
+  and start and target dates if you like. The updates you wrote can be edited or
+  deleted from their own menu.
+- **See a GitHub Project as a board, without leaving the app.** The new **Projects** tab
+  (More ▾, or the command palette) draws any board this repository or its owner has
+  as a live kanban: pick which of the board's **single-select or iteration** fields makes
+  the columns (**Status** to start with), and anything that field doesn't cover collects
+  in a column of its own so nothing is hidden. Group by an iteration field and the board
+  is a sprint board: a column per iteration the field defines, plus any finished one that
+  still holds a card. Cards carry their state, number, owning repository (when a board
+  spans several) and assignees; **draft** items open their notes in place, dated with
+  when the note was written and when it last changed; issues and pull requests from
+  this repository open on their own tab (cards from elsewhere open on GitHub), and
+  the whole board answers to the arrow keys. **Space** on an issue or pull request card,
+  or **Show details** from its menu, peeks at its title, what it is, and when it was
+  opened, joined the board and last changed, without leaving the columns. Large boards
+  page in with **Load more**. **Add item** fills the board from the toolbar: search this
+  repository's issues and pull requests and add several in a row, or write a **draft** —
+  a Markdown note that lives on the board until it earns an issue (**Ctrl/Cmd+Enter**
+  creates it). Either way the card is there as the write lands, drawn from GitHub's own
+  answer to it. Right-click a card (Shift+F10 on Windows and Linux) to **move it to
+  another column**: the board re-draws where it lands and your keyboard place goes with
+  it while the write reaches GitHub behind you. **Order a column from the keyboard**,
+  too: **Alt/Option+↑ / ↓** move the card you're on one place, **Alt/Option+Home / End**
+  send it to the column's top or bottom, and the card's menu and the command palette
+  carry the same four. That's the **project's own order**, the one GitHub shows
+  everyone, and holding the keys down is fine: the board keeps up and writes where the
+  card finally lands. The same menu **edits a draft** (its title, its Markdown notes
+  and its assignees, saved with **Ctrl/Cmd+Enter**), **converts a draft into a real
+  issue**, **archives** a card, and **removes** one from the project, the last three
+  confirming first. **Archived cards are one switch away**: turn on **Show archived
+  cards** under **View options** and they're back in their columns, marked **Archived**
+  and drawn quietly, with **Restore card** on each one putting it straight back on the
+  board. (The command palette carries the switch as **Show or hide archived cards**.)
+  **Take several cards at once**: **Ctrl/Cmd+click** picks cards out individually,
+  **Shift+click** (or **Shift** with the arrow keys) takes a range down a column, and
+  from two cards up a bar above the board **moves**, **archives**, **restores**,
+  **removes** or **sets the fields of** the cards each verb can reach. **Edit fields
+  of N cards…** lists the board's own fields with every row on **Leave as is**: draft
+  only the ones you mean, set or clear them, and one **Apply** writes exactly those to
+  every eligible card, with each row reporting what the selection holds today: the
+  value where the cards agree, **(mixed)** where they don't. Every count on the bar
+  shows exactly what that verb will reach (archived cards sit out a field edit, for
+  instance), and the prompts say where the cards go, drafts included. When some
+  cards refuse a change, the toast leads with the reason and **Details** lists
+  each refused card by title with GitHub's full answer.
+  The card menu speaks for the selection too, the palette carries Edit fields,
+  Archive, Restore, Remove and Clear, and **Esc** drops the whole thing. Cards that
+  leave the board leave the selection with them.
+  Creating an issue can put it on its boards in the same step: the **New issue** dialog
+  gained a **Projects** picker. The board's **saved views** come along as lenses: pick
+  one under **View options** and GitHub filters the read for you, its sort orders the
+  cards in each column (by **Title**, or by a text, number, date, single-select or
+  iteration field), its visible fields show as chips on the cards, and its grouping
+  seeds **Group by** while you stay free to regroup. **Clear view** (or **Clear
+  project view** in the command palette) brings the whole item set back in the board's
+  own order with the chips off, leaving the grouping wherever you last put it. Picking
+  a view and regrouping never change what GitHub has saved.
+  GitHub only; reading a board needs the same `project` or `read:project` sign-in scope
+  the Projects picker already asks for, and every write here needs the `project` scope
+  plus write access to the board.
+- **Roadmap views open as timelines.** A GitHub Project view saved as a roadmap now opens
+  as one in the **Projects** tab: each item is a bar from its start date to its target
+  along a **Month**, **Quarter** or **Year** scale, with a line for today, the current
+  iteration shaded and named, and milestone due dates marked. **View options** picks the
+  date or iteration fields that place the items (the view's own date fields come
+  pre-picked) and the zoom, and **Today** brings the present back into view. On the
+  timeline, **Alt/Option+← / →** shifts the item you're on by a day (or by an
+  iteration), and **Alt/Option+Shift+← / →** moves its target date alone; the bar moves as
+  you press and holding the keys keeps saving as it goes. Rows keep the table's sections,
+  selection, menu and bulk bar.
+- **Table views open as tables.** A GitHub Project view saved as a table now opens as
+  one in the **Projects** tab: a row per item and the view's visible fields as columns,
+  **Title** first and the rest in the view's saved order, with assignees, labels,
+  milestone, repository, reviewers and linked pull requests among them (a **+N** marks a
+  list GitHub sent only part of). The header row and the **Title** column stay in place
+  while you scroll, the rows follow the view's sort with each sorted column marked in
+  its header, and a view that groups its rows shows them as sections you can fold away.
+  Edit a board field (text, number, date, single- or multi-select, iteration) right in
+  its cell: click it or press **Enter**, and **Esc** backs out without saving. A cell
+  that won't save says why, with **Details** or **Copy** for GitHub's full answer. The
+  arrow keys move cell by cell and **Page Up / Page Down** a screen at a time, rows take
+  the same selection, menu and bulk bar as cards on the board, and in a table that
+  neither sorts nor groups its rows, **Alt/Option+↑ / ↓** move the row you're on
+  through the project order. The **Project fields** line on an issue or pull request
+  reads those same fields too.
+- **Jump to either end of a long thread in one click.** Pull request, issue, and
+  discussion conversations gain scroll-aware arrow buttons by the scrollbar that take you
+  to the top or the newest activity at the bottom, and *Jump to the top of the thread* /
+  *Jump to the bottom of the thread* in the command palette do the same.
+
+### Changed
+
+- Branch context-menu actions that wait on a running branch operation say
+  **(operation in progress)** on their label, so the reason sits with the
+  action.
+- Icon-only copy buttons for webhook URLs and payloads, `gh` commands and
+  window coordinates now show the app's focus ring when you tab to them,
+  and every icon-only copy button names what it copies in both its
+  tooltip and its screen-reader label.
+- Partly finished work keeps the full error one click away. When an issue or
+  pull request is created but a follow-up step fails (such as linking it to a
+  project or parent issue, carrying over comments, or posting reviewer notes),
+  and when removing a worktree can't archive its branch or a promote stops
+  after the folder is gone, the toast offers **Details** or **Copy** for the
+  underlying error, and so does a failure to start or re-run an automation. A
+  new issue that misses both its project and its parent link shows each reason
+  under its own heading. When the toast can also open what was created, its
+  button names the site (**View on GitHub**, **View on GitLab**, **View in
+  Jira**) and **Details** carries the same link, so reading the error never
+  costs you the way there. Pushes, pulls, and other remote operations refused
+  because no usable SSH key was offered now explain what to set up: add or load
+  a key with access to that remote.
+- CWE, CVE and GHSA identifiers in the Findings detail open their advisory
+  pages: CWE entries on MITRE, CVEs on NVD, and GHSA ids in the GitHub
+  Advisory Database, or on the repository advisory's own page when it has one.
+  They look and work like the identifier chips on GitLab findings. Hovering an
+  identifier or pipeline link in any GitHub or GitLab finding's detail shows
+  the address it opens.
+- A new issue appears at the top of the issue list the moment the create dialog
+  closes (with a server-side filter active it arrives on the next refresh),
+  ready to open, link or select.
+- The pull request and issue list toolbars now use the sidebar's width evenly: the state
+  filters sit on the first row with **New** and the filter funnel, and the **All | Mine**
+  scopes (with the fork lens, where there is one) on the second.
+- **Tasks belong to the repository you create them in.** The task editor's
+  **Available in** choice keeps a task to **This repository** or offers it in
+  **All repositories**, so a repo's own release script stays with that repo
+  while a general one follows you everywhere (tasks you saved earlier stay
+  available everywhere). Tasks from your other repositories stay listed under
+  **Other repositories**, ready to edit or delete. Choosing a script file for
+  an **All repositories** task saves its full path, so it runs the same file
+  wherever you open it. A run pointed at a script in the repo names the exact
+  file it resolved, and its first run in each repository confirms.
+- **Projects on every pull request, and in the command palette.** The **Projects** picker
+  now rides closed and merged pull requests as well as open ones, so a finished pull
+  request can still join or leave a board. **Edit projects…** opens the picker from the
+  palette on issues and pull requests alike, and the **assignees**, **labels**, and
+  **reviewers** pickers walk their rows with the arrow keys and cycle them with Tab, so
+  you can work the whole list one-handed. The Projects picker also says when an item sits
+  on more boards than GitHub handed back.
+- **Split-view line staging takes both sides in one drag.** Dragging the line
+  numbers in the split diff now picks up the removed and the added lines of every
+  change it crosses, so a whole modification stages in one gesture. Hold **Shift**
+  while dragging, in either view, to take just one side of a change, and the
+  highlight tints exactly the lines the selection holds.
+- **Untracked files show their line count right away.** A new file's row in the
+  Changes list carries its `+added` count the moment it appears, with no staging
+  first — every line counts as an addition, and binary files read `bin`.
+
+### Fixed
+
+- The Actions panel's run count for a single branch reads "1,000+" once
+  the total passes the 1,000 runs GitHub lets a branch-filtered view load.
+- The force-push warning and your branch rules apply to an amend started the
+  moment a repository opens, so a protected branch is guarded from the first
+  click. Dismissing the warning with **Don't show this again** takes effect only
+  when the amend actually goes ahead.
+- Automations load and save while you're offline: the configuration lives on
+  your machine, so the Automations settings stay fully editable with no
+  connection.
+- Background PR sync checks each GitHub host's session, each GitLab instance's
+  sign-in, and your Bitbucket account once per minute rather than once per
+  repository, and keeps syncing repositories on every signed-in host even when
+  an account on another host needs attention. Repositories whose remote uses an
+  SSH host alias, such as `github.com-work`, are still checked one by one.
+- Status badges that carry more to say (why a session expired, when a rate
+  limit lifts, why a worktree is locked, and similar) open their details
+  with a click, a tap, or the keyboard, and screen readers read them out.
+  Failed runs in the activity dock expand to their full error the same way.
+- Bitbucket errors from reads now name the read access to add
+  (repository, account, or pipeline) when your API token is missing a
+  required scope.
+- Generated branch names follow your repository's own prefix convention: the
+  suggestion weighs the prefixes across every branch you have and picks the one
+  that fits the change — including a bare name, where bare names are what your
+  repository uses.
+- The **Compare** tab's branch picker, the base-branch picker, and the pull
+  request branch pickers name the **main workspace** when that's where a branch
+  is checked out, matching the branch dropdown's own wording.
+- Hand-edited branch rules heal on load: unknown entries in a protection's
+  allowed merge methods are dropped from the working view (both the personal
+  store and a committed `.gitdesktop/branch-rules.json`), so the merge-method
+  checkboxes always show exactly what is enforced.
+- Checking out a branch, commit, pull request, or tag while a worktree promotion
+  is finishing now asks you to try again once it's done, keeping the
+  promotion's own checkout intact.
+- Finishing a create after you switch repositories leaves the repository you
+  moved to as you left it: your selection, your open tab and any draft you have
+  on screen stay put. The completion toast names the repository the new local
+  pull request, issue, Jira issue, release or published repository belongs to.
+- Creating a pull request, branch, tag, release, discussion, comment, webhook
+  or pipeline variable, or saving repository settings, refreshes the right
+  lists and details even if you switch repositories while it finishes: the
+  updates land in the repository the work started in, not the one you moved to.
+  A new issue's link to its parent is made in that repository as well.
+- Signing in to GitHub from the app opens your browser for you and keeps the
+  verification link on screen with a one-click copy, so you can finish in
+  whichever browser you like. When `glab` can't open a browser itself, the
+  GitLab sign-in shows its link the same way.
+- Focus rings draw complete on every control in a scrolling dialog body, so
+  tabbing through a long form (Create pull request, Create issue, Repository
+  settings, Keyboard shortcuts and the rest) always shows the full outline of
+  where you are.
+- Failures name the actual reason: the upstream-fetch note in **Create pull
+  request**, the error under a review that couldn't be submitted, the detail on
+  a worktree promote that stopped partway, and the MCP launcher notice in
+  Settings all say what went wrong.
+- Failures say why at a glance: error toasts lead with Git's reason for a
+  rejected push (for example `! [rejected] main -> main (non-fast-forward)`),
+  and a failed AI review's notification gives its reason in one line. Details
+  and the review panel still show the full output, and so does the notification
+  itself: its arrow button (or the right arrow key on the row) unfolds the
+  whole text beneath it, with **Open in Details** when it runs long.
+- Failed pulls, fetches, and multi-ref pushes lead with Git's reason, such as
+  `Not possible to fast-forward, aborting.` or the ref Git rejected, with the
+  full output still in Details. Publishing a local pull request or issue and
+  linking a new issue also report a failure in one line.
+- CWE chips in a Dependabot alert's detail keep each identifier on one line
+  at any pane width, and a long weakness name wraps inside its chip.
+- Errors from GitLab, Bitbucket, and Jira reads lead with a plain-language
+  summary, and GitHub's merge branch-cleanup notice takes the same shape; open
+  Details to see the original technical message.
+- A repository's GitHub features follow the sign-in on its own host, so an
+  account on another GitHub host needing attention no longer hides them.
+- A GitHub API rate limit now says so, with the time access resumes when GitHub
+  reports it. Hosted panels show the rate-limit notice too, and load on their
+  own once a later check finds the limit cleared. Settings → Accounts marks
+  the affected account as rate limited.
+- Self-managed GitLab reads follow the repository's instance or your glab
+  default instance. Saved credentials take priority over environment tokens for
+  another instance, while setups authenticated only by an environment token
+  continue to work. Reconnecting to an instance signs in with that instance's
+  own credentials, even when an environment token for another one is set.
+- GitLab recognizes your own merge requests, keeps notifications focused on
+  others' work, and catches up on reviews when you open a merge request.
+- Text renders character for character everywhere in the app: `--flag`,
+  `->`, `!=` and `::` show as the characters you typed, in inputs, labels and
+  diffs alike.
+- Clicking a notification now opens its target in a live checkout of the
+  repository — when the original worktree is gone, another copy is used, and with
+  none available the app says so instead of navigating. Pull-request
+  notifications also land on the list tab that contains the PR, so a merged one
+  arrives selected on Closed. A repository whose folder is gone from disk now
+  says exactly that, with a way back to your repositories.
+- The Changes view and diffs, commit history, branches and comparisons,
+  stashes, the local insight charts, local pull requests and issues, and
+  your settings load and refresh with no network connection.
+- While a GitHub or GitLab API rate limit is in effect, the command palette's
+  **Reconnect forge session** steps aside, since a fresh sign-in draws on the
+  same quota; it returns once GitDesktop sees the limit clear.
+- A pull request's checks panel, its icon in the pull request list, and the
+  checks notification now count a workflow that re-ran after a label, title,
+  or description edit by its latest run, so a passing pull request reads as
+  passing and a fixing re-run reports that checks passed.
+- Re-running, cancelling, approving or starting a workflow run refreshes the
+  check badges on the pull request list and the checks on the pull request
+  itself, so every surface showing that run agrees.
+- Creating a pull request checks the branch for an open one first and, when it
+  finds one, offers the link instead of opening a duplicate.
+- Opening a pull request stays anchored to the repository you started it in:
+  switch repositories while the create is still running and the fork/upstream
+  view, the selected pull request and any dialog open where you are now are
+  left as they are, the create dialog there opens on a fresh draft of its own,
+  and the completion toast names the repository it belongs to.
+- Opening a pull request from a branch chip, a project board card, an issue's
+  development links or a timeline reference lands on the list tab that shows
+  that pull request, with its row scrolled into view. Stepping through a
+  stack, with the stack shortcuts or its member chips, does the same for each
+  pull request you visit.
+- The pull request timeline now shows assignments, milestones,
+  cross-references, linked issues, and lock events, matching what the issue
+  timeline already shows.
+- When a GitHub or GitLab publish stops after the repository was created,
+  the error headline now says so, letting you recover before retrying. If
+  a GitHub create-and-push fails or a GitLab create times out, the error
+  details suggest checking for a partial publish.
+- Repository-scoped MCP servers and per-repository automation rules find
+  their repository on their own: if the repository's identity can't be read
+  as it opens, the lookup retries, so a scoped server matches and saved
+  automation rules apply without a restart. A folder replaced by a different
+  repository mid-session is recognized as the new one, so per-repository
+  data keeps landing where it belongs.
+- Per-repository data stays attached to the right repository even when Git is
+  temporarily unavailable or slow to answer.
+- The fork/upstream view you pick for the pull-request and issue lists is
+  remembered for your next session, and a choice that can't be written to disk
+  says so on the spot.
+- Your app data recovers on its own: if a file can't be read, the next access
+  retries, so your settings, saved records, and history come back without a
+  restart.
+- The Clone button in Explore and Create issue in the Jira dialog stay
+  reachable by keyboard while they're held, and announce what's missing (a
+  local path, an issue type) to screen readers as well as on hover.
+- A terminal session or task run that can't start names the reason in the
+  terminal (a missing script file, an interpreter that isn't installed), and a
+  task that fails to save, delete, or enable toasts a readable summary with
+  **Details** / **Copy** for the full text.
+- A webhook you're editing always belongs to the repository you opened it in.
+  Switching repositories with **Repository settings** open brings that
+  repository's own settings forward across every section, on GitHub, GitLab
+  and Bitbucket alike.
+
 ## [0.12.2] - 2026-09-10
 
 ### Changed
@@ -3903,7 +4322,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.12.2...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/theBGuy/GitDesktop/compare/v0.12.2...v0.13.0
 [0.12.2]: https://github.com/theBGuy/GitDesktop/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/theBGuy/GitDesktop/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/theBGuy/GitDesktop/compare/v0.11.1...v0.12.0
