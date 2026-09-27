@@ -30,6 +30,9 @@ pub struct GhStatus {
     pub host: Option<String>,
     /// The active account's login on this repo's host, when it can be determined.
     pub login: Option<String>,
+    /// Set when the repo lookup failed on a positively-identified class.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub probe_error: Option<crate::forge::model::ProbeError>,
 }
 
 #[derive(Deserialize)]
@@ -64,6 +67,7 @@ pub async fn gh_status(repo_path: String) -> AppResult<GhStatus> {
                 repo: None,
                 host: None,
                 login: None,
+                probe_error: None,
             });
         }
         Err(e) => return Err(e),
@@ -95,24 +99,21 @@ pub async fn gh_status(repo_path: String) -> AppResult<GhStatus> {
     // has no `-R`): a bare `gh repo view` on a fork with an `upstream` remote
     // resolves to the PARENT, so repo/host would name the upstream. Best-effort:
     // an unparseable origin leaves both unresolved.
-    let view = if authenticated {
+    let (repo, host, probe_error) = if authenticated {
         match crate::github::gh_origin_slug(&repo_path).await {
-            Ok(slug) => run_gh_raw(
-                Some(&repo_path),
-                &["repo", "view", &slug, "--json", "nameWithOwner,url"],
-                GH_TIMEOUT,
-            )
-            .await
-            .ok()
-            .filter(|o| o.code == 0)
-            .and_then(|o| serde_json::from_str::<RepoView>(&o.stdout_lossy()).ok()),
-            Err(_) => None,
+            Ok(slug) => repo_view_outcome(
+                run_gh_raw(
+                    Some(&repo_path),
+                    &["repo", "view", &slug, "--json", "nameWithOwner,url"],
+                    GH_TIMEOUT,
+                )
+                .await,
+            ),
+            Err(_) => (None, None, None),
         }
     } else {
-        None
+        (None, None, None)
     };
-    let repo = view.as_ref().map(|v| v.name_with_owner.clone());
-    let host = view.as_ref().and_then(|v| host_from_url(&v.url));
 
     // The active login on the repo's host (each host has its own active
     // account); the text fallback takes any active account when the host is unknown.
@@ -133,7 +134,36 @@ pub async fn gh_status(repo_path: String) -> AppResult<GhStatus> {
         repo,
         host,
         login,
+        probe_error,
     })
+}
+
+/// `gh_status`'s repo lookup as `(repo, host, probe_error)`. Only rate-limit wording
+/// in stderr classifies a failure: any other one (a revoked token included) stays
+/// unclassified so it keeps today's arms. The lookup runs only when auth read
+/// Healthy, so a just-revoked token misread here heals on the next status refetch.
+pub(crate) fn repo_view_outcome(
+    result: AppResult<crate::github::runner::GhOutput>,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<crate::forge::model::ProbeError>,
+) {
+    let Ok(out) = result else {
+        return (None, None, None);
+    };
+    if out.code != 0 {
+        let class = crate::forge::session::gh_error_is_rate_limit(Some(&out.stderr))
+            .then_some(crate::forge::model::ProbeError::RateLimited);
+        return (None, None, class);
+    }
+    match serde_json::from_str::<RepoView>(&out.stdout_lossy()) {
+        Ok(view) => {
+            let host = host_from_url(&view.url);
+            (Some(view.name_with_owner), host, None)
+        }
+        Err(_) => (None, None, None),
+    }
 }
 
 #[derive(Serialize)]
@@ -3300,6 +3330,14 @@ struct RawCheck {
     started_at: Option<String>,
     #[serde(default)]
     completed_at: Option<String>,
+    /// `CheckRun` or `StatusContext`. Deserialize-only, like `workflow_name`: both
+    /// feed the superseded-run collapse and never reach `PrCheckOut`.
+    #[serde(default, rename = "__typename", deserialize_with = "null_to_default")]
+    typename: String,
+    /// The Actions workflow a CheckRun belongs to; "" for a third-party check run,
+    /// and absent on a gh too old to export it (which leaves the row uncollapsed).
+    #[serde(default, rename = "workflowName", deserialize_with = "null_to_default")]
+    workflow_name: String,
 }
 
 /// Extract `(run_id, job_id)` from a GitHub Actions check details URL of the form
@@ -3363,6 +3401,10 @@ struct RawPr {
     base_ref_name: String,
     #[serde(default)]
     head_ref_name: String,
+    /// The head commit, straight from the PR. Deserialize-only: it pins the checks'
+    /// event data to this head, where the commit list can stop short of it.
+    #[serde(default, deserialize_with = "null_to_default")]
+    head_ref_oid: String,
     #[serde(default)]
     additions: u32,
     #[serde(default)]
@@ -3815,7 +3857,7 @@ pub struct ApprovalState {
     pub viewer_requested_changes: bool,
 }
 
-const PR_VIEW_FIELDS: &str = "id,number,title,body,author,state,isDraft,baseRefName,headRefName,additions,deletions,url,commits,files,reviews,comments,statusCheckRollup,labels,assignees,reviewRequests,mergeable,mergeStateStatus,isCrossRepository,maintainerCanModify";
+const PR_VIEW_FIELDS: &str = "id,number,title,body,author,state,isDraft,baseRefName,headRefName,headRefOid,additions,deletions,url,commits,files,reviews,comments,statusCheckRollup,labels,assignees,reviewRequests,mergeable,mergeStateStatus,isCrossRepository,maintainerCanModify";
 
 const REPO_MERGE_SETTINGS_QUERY: &str = "query($owner:String!,$name:String!){ repository(owner:$owner,name:$name){ mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed } }";
 
@@ -3872,6 +3914,279 @@ async fn gh_repo_merge_settings(repo_path: &str, pr_url: &str) -> AppResult<Repo
     })
 }
 
+/// One CheckRun from [`check_run_events_query`]. Its `event` is the collapse-key part
+/// `gh pr view --json` never exports; `name`/`started_at`/`workflow` are the join key
+/// back onto the view's rows.
+#[derive(Debug, Clone, PartialEq)]
+struct CheckRunEvent {
+    name: String,
+    /// `None` when undated (queued / not yet started).
+    started_at: Option<String>,
+    event: String,
+    workflow: String,
+}
+
+/// A [`check_run_events_query`] answer, pinned to the head commit it describes.
+#[derive(Debug, Clone, PartialEq)]
+struct CheckRunEvents {
+    head_oid: String,
+    events: Vec<CheckRunEvent>,
+}
+
+/// The head commit's rollup contexts for ONE PR. Single-PR scoped by design: the
+/// tree-wide rollup expansion 504s on large repos (see [`gh_pr_list_ci`]). Both embeds
+/// are validated by the caller; `number` is digits by type.
+fn check_run_events_query(owner: &str, name: &str, number: u64) -> String {
+    format!(
+        r#"query{{ repository(owner:"{owner}", name:"{name}"){{ pullRequest(number:{number}){{ commits(last:1){{ nodes{{ commit{{ oid statusCheckRollup{{ contexts(last:100){{ totalCount nodes{{ __typename ... on CheckRun{{ name startedAt checkSuite{{ workflowRun{{ event workflow{{ name }} }} }} }} }} }} }} }} }} }} }} }} }}"#
+    )
+}
+
+/// The CheckRun rows of a [`check_run_events_query`] answer, or `None` when it can't be
+/// trusted whole — unparseable, missing the head oid or the rollup, or holding more
+/// contexts than the one page fetched: an omitted twin would make an included row's
+/// join look unambiguous and key it under the wrong event.
+fn parse_check_run_events(body: &str) -> Option<CheckRunEvents> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let commit = value.pointer("/data/repository/pullRequest/commits/nodes/0/commit")?;
+    let head_oid = commit
+        .get("oid")
+        .and_then(serde_json::Value::as_str)
+        .filter(|oid| !oid.is_empty())?
+        .to_string();
+    let contexts = commit.pointer("/statusCheckRollup/contexts")?;
+    let nodes = contexts.get("nodes")?.as_array()?;
+    let total = contexts.get("totalCount")?.as_u64()?;
+    if total > nodes.len() as u64 {
+        return None;
+    }
+    let text = |n: &serde_json::Value, p: &str| {
+        n.pointer(p)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let events = nodes
+        .iter()
+        .filter(|n| n.get("__typename").and_then(serde_json::Value::as_str) == Some("CheckRun"))
+        .map(|n| CheckRunEvent {
+            name: text(n, "/name"),
+            started_at: n
+                .get("startedAt")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| real_check_time(s))
+                .map(String::from),
+            event: text(n, "/checkSuite/workflowRun/event"),
+            workflow: text(n, "/checkSuite/workflowRun/workflow/name"),
+        })
+        .collect();
+    Some(CheckRunEvents { head_oid, events })
+}
+
+/// The events to collapse with, or `None` unless they describe the view's own head.
+/// A recalled entry from an older head never joins, and a fresh fetch racing a push is
+/// dropped the same way: the oid guarantees it, where start-time uniqueness only
+/// makes a cross-head join unlikely.
+fn events_for_head(
+    fetched: Option<CheckRunEvents>,
+    head_oid: Option<&str>,
+) -> Option<Vec<CheckRunEvent>> {
+    let fetched = fetched?;
+    (head_oid.is_some_and(|oid| !oid.is_empty() && oid == fetched.head_oid))
+        .then_some(fetched.events)
+}
+
+/// The PR's CheckRun events for [`collapse_superseded_checks`], applied only through
+/// [`events_for_head`]. Best-effort by contract, like [`gh_repo_merge_settings`]: a
+/// failed fetch falls back to this PR's last successful one (see
+/// [`remember_or_recall_check_run_events`]), else `None`, which leaves the check runs
+/// exactly as `gh pr view` listed them.
+async fn gh_check_run_events(repo_path: &str, slug: &str, number: u64) -> Option<CheckRunEvents> {
+    let fetched = fetch_check_run_events(repo_path, slug, number).await;
+    match check_run_events_memo().lock() {
+        Ok(mut memo) => remember_or_recall_check_run_events(&mut memo, slug, number, fetched),
+        // A poisoned memo is skipped, never fatal: the fetch result stands alone.
+        Err(_) => fetched,
+    }
+}
+
+async fn fetch_check_run_events(
+    repo_path: &str,
+    slug: &str,
+    number: u64,
+) -> Option<CheckRunEvents> {
+    let (owner, name) = slug.split_once('/')?;
+    validate_graphql_embed(owner, "repository owner").ok()?;
+    validate_graphql_embed(name, "repository name").ok()?;
+    let query = check_run_events_query(owner, name, number);
+    let out = run_gh(
+        Some(repo_path),
+        &["api", "graphql", "-f", &format!("query={query}")],
+        GH_TIMEOUT,
+    )
+    .await
+    .ok()?;
+    parse_check_run_events(&out.stdout_lossy())
+}
+
+type CheckRunEventsMemo = std::collections::HashMap<(String, u64), CheckRunEvents>;
+
+/// Entries the memo holds before it starts over. Sized well past a PR list: row hover
+/// and arrow keys prefetch the PR view, one key each, and a clear evicts the open PR's
+/// entry and reopens the flap window the memo exists to close.
+const CHECK_RUN_EVENTS_MEMO_CAP: usize = 256;
+
+fn check_run_events_memo() -> &'static std::sync::Mutex<CheckRunEventsMemo> {
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<CheckRunEventsMemo>> =
+        std::sync::OnceLock::new();
+    MEMO.get_or_init(Default::default)
+}
+
+/// Records a successful fetch per (slug, number), or recalls the last one when the
+/// fetch failed, so a flaky events read on one head can't flip the collapse (and the
+/// failed count it feeds) between refetches. An entry carries its head oid and is
+/// applied only through [`events_for_head`], so recall is same-head only; across heads
+/// the degrade is no collapse until a fetch lands. Recalls need no undated filtering:
+/// undated rows are never keyed (see [`collapse_superseded_checks`]).
+fn remember_or_recall_check_run_events(
+    memo: &mut CheckRunEventsMemo,
+    slug: &str,
+    number: u64,
+    fetched: Option<CheckRunEvents>,
+) -> Option<CheckRunEvents> {
+    let key = (slug.to_string(), number);
+    match fetched {
+        Some(events) => {
+            if memo.len() >= CHECK_RUN_EVENTS_MEMO_CAP && !memo.contains_key(&key) {
+                memo.clear();
+            }
+            memo.insert(key, events.clone());
+            Some(events)
+        }
+        None => memo.get(&key).cloned(),
+    }
+}
+
+#[derive(PartialEq, Eq, Hash)]
+enum SupersedeKey {
+    /// (name, workflow, event) — `gh pr checks`' own duplicate key for a CheckRun.
+    Run(String, String, String),
+    /// A StatusContext's context string.
+    Context(String),
+}
+
+/// Whether a row that started at `candidate` is at least as new as one that started
+/// at `incumbent`; a tie goes to the later row. GitHub's timestamps are uniform
+/// RFC 3339 UTC, so they order as strings.
+fn at_least_as_new(candidate: &str, incumbent: &str) -> bool {
+    candidate >= incumbent
+}
+
+/// Keeps only the newest row per [`SupersedeKey`], so a workflow re-triggered by PR
+/// events reads as its latest run. Keying needs a real start: an undated row (queued,
+/// or cancelled before it started) has no order, and `(name, workflow, no start)` names
+/// no single run, so it could join a sibling's event; such rows are always kept. A
+/// CheckRun is keyed only when its event joins unambiguously from `runs` and it names a
+/// workflow and event: a degenerate key would merge a push run with its pull_request
+/// twin. `runs` is a fresh fetch or a same-head recall (see [`events_for_head`]);
+/// `None` (fetch failed, nothing to recall) keys no CheckRun.
+fn collapse_superseded_checks(
+    checks: Vec<RawCheck>,
+    runs: Option<&[CheckRunEvent]>,
+) -> Vec<RawCheck> {
+    fn started(c: &RawCheck) -> Option<&str> {
+        c.started_at.as_deref().filter(|s| real_check_time(s))
+    }
+    let keep: Vec<bool> = {
+        let event_of = |c: &RawCheck| -> Option<String> {
+            let mut hits = runs?.iter().filter(|r| {
+                r.name == c.name
+                    && r.workflow == c.workflow_name
+                    && r.started_at.as_deref() == started(c)
+            });
+            let hit = hits.next()?;
+            hits.next().is_none().then(|| hit.event.clone())
+        };
+        let keys: Vec<Option<(SupersedeKey, &str)>> = checks
+            .iter()
+            .map(|c| {
+                let start = started(c)?;
+                let key = if !c.name.is_empty() {
+                    if c.typename != "CheckRun" || c.workflow_name.is_empty() {
+                        return None;
+                    }
+                    let event = event_of(c).filter(|e| !e.is_empty())?;
+                    SupersedeKey::Run(c.name.clone(), c.workflow_name.clone(), event)
+                } else if !c.context.is_empty() {
+                    SupersedeKey::Context(c.context.clone())
+                } else {
+                    return None;
+                };
+                Some((key, start))
+            })
+            .collect();
+        let mut winners: std::collections::HashMap<&SupersedeKey, (usize, &str)> =
+            std::collections::HashMap::new();
+        for (i, keyed) in keys.iter().enumerate() {
+            if let Some((key, start)) = keyed {
+                winners
+                    .entry(key)
+                    .and_modify(|w| {
+                        if at_least_as_new(start, w.1) {
+                            *w = (i, start);
+                        }
+                    })
+                    .or_insert((i, start));
+            }
+        }
+        keys.iter()
+            .enumerate()
+            .map(|(i, keyed)| keyed.as_ref().is_none_or(|(k, _)| winners[k].0 == i))
+            .collect()
+    };
+    checks
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(c, keep)| keep.then_some(c))
+        .collect()
+}
+
+/// One rollup row as the frontend sees it.
+fn map_gh_check(c: RawCheck) -> PrCheckOut {
+    let name = if c.name.is_empty() { c.context } else { c.name };
+    let status = [c.conclusion, c.state, c.status]
+        .into_iter()
+        .find(|s| !s.is_empty())
+        .unwrap_or_default();
+    // Drop an empty string so an absent link stays None.
+    let details_url = c.details_url.or(c.target_url).filter(|u| !u.is_empty());
+    let (run_id, job_id) = details_url
+        .as_deref()
+        .map(parse_actions_run_job)
+        .unwrap_or((None, None));
+    // Drop empty AND Go-zero-value sentinel timestamps (see `real_check_time`) so a
+    // still-running check reads as unfinished.
+    PrCheckOut {
+        name,
+        status,
+        details_url,
+        run_id,
+        job_id,
+        started_at: c.started_at.filter(|s| real_check_time(s)),
+        completed_at: c.completed_at.filter(|s| real_check_time(s)),
+    }
+}
+
+/// The PR's `checks`, collapsed (best-effort: check runs only when events are
+/// available) to each check's latest run before anything reads them — counts,
+/// auto-open, the required-checks join, and the re-run offers.
+fn map_gh_checks(rollup: Vec<RawCheck>, runs: Option<&[CheckRunEvent]>) -> Vec<PrCheckOut> {
+    collapse_superseded_checks(rollup, runs)
+        .into_iter()
+        .map(map_gh_check)
+        .collect()
+}
+
 /// Full details for one PR's read view.
 pub async fn gh_pr_view(
     repo_path: String,
@@ -3888,9 +4203,11 @@ pub async fn gh_pr_view(
     // `gh_pr_stack`, so a slow member fetch can't discard a membership already
     // established. Timing out hop 1 is a FAILED probe, not "unstacked".
     let view_args = ["pr", "view", &n, "--repo", &slug, "--json", PR_VIEW_FIELDS];
-    let (out, probe) = tokio::join!(
+    // The check-run events ride alongside too, so the collapse adds no serial hop.
+    let (out, probe, check_runs) = tokio::join!(
         run_gh(Some(&repo_path), &view_args, GH_TIMEOUT),
         gh_pr_stack(&repo_path, &slug, number),
+        Box::pin(gh_check_run_events(&repo_path, &slug, number)),
     );
     let PrStackProbe {
         stack,
@@ -4078,6 +4395,10 @@ pub async fn gh_pr_view(
         .await
         .unwrap_or_default();
 
+    // The view's own head oid, never the commit list: that list stops at 250 (REST) or
+    // 100 (GraphQL) commits, so on a large PR its last entry is not the head.
+    let check_runs = events_for_head(check_runs, Some(raw.head_ref_oid.as_str()));
+
     // Free: `mergeable`/`mergeStateStatus` ride the same `gh pr view` call. The
     // narrow `gh_pr_mergeability` read exists for the frontend's re-poll.
     let mergeability = map_gh_mergeability(&raw.state, &raw.mergeable, &raw.merge_state_status);
@@ -4101,37 +4422,7 @@ pub async fn gh_pr_view(
         files,
         reviews,
         comments,
-        checks: raw
-            .status_check_rollup
-            .into_iter()
-            .map(|c| {
-                let name = if c.name.is_empty() { c.context } else { c.name };
-                let status = [c.conclusion, c.state, c.status]
-                    .into_iter()
-                    .find(|s| !s.is_empty())
-                    .unwrap_or_default();
-                // Drop an empty string so an absent link stays None.
-                let details_url = c
-                    .details_url
-                    .or(c.target_url)
-                    .filter(|u| !u.is_empty());
-                let (run_id, job_id) = details_url
-                    .as_deref()
-                    .map(parse_actions_run_job)
-                    .unwrap_or((None, None));
-                // Drop empty AND Go-zero-value sentinel timestamps (see
-                // `real_check_time`) so a still-running check reads as unfinished.
-                PrCheckOut {
-                    name,
-                    status,
-                    details_url,
-                    run_id,
-                    job_id,
-                    started_at: c.started_at.filter(|s| real_check_time(s)),
-                    completed_at: c.completed_at.filter(|s| real_check_time(s)),
-                }
-            })
-            .collect(),
+        checks: map_gh_checks(raw.status_check_rollup, check_runs.as_deref()),
         labels: raw.labels,
         assignees: raw
             .assignees
@@ -7436,7 +7727,12 @@ mod tests {
     #[test]
     fn view_fields_request_mergeability_and_the_list_still_does_not() {
         let view: Vec<&str> = PR_VIEW_FIELDS.split(',').collect();
-        for f in ["mergeable", "mergeStateStatus", "isCrossRepository"] {
+        for f in [
+            "mergeable",
+            "mergeStateStatus",
+            "isCrossRepository",
+            "headRefOid",
+        ] {
             assert!(view.contains(&f), "{f} missing from: {PR_VIEW_FIELDS}");
         }
         let list: Vec<&str> = PR_LIST_FIELDS.split(',').collect();
@@ -8181,6 +8477,487 @@ github.acme.com
             real_time_or_empty("2026-07-18T12:34:56Z".into()),
             "2026-07-18T12:34:56Z"
         );
+    }
+
+    mod check_collapse {
+        use super::super::{
+            check_run_events_query, events_for_head, map_gh_check, map_gh_checks,
+            parse_check_run_events, remember_or_recall_check_run_events, CheckRunEvent,
+            CheckRunEvents, CheckRunEventsMemo, PrCheckOut, RawCheck, RawPr,
+            CHECK_RUN_EVENTS_MEMO_CAP,
+        };
+
+        const HEAD_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const HEAD_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+        fn pinned(head_oid: &str, events: Vec<CheckRunEvent>) -> CheckRunEvents {
+            CheckRunEvents {
+                head_oid: head_oid.into(),
+                events,
+            }
+        }
+
+        /// A CheckRun row as `gh pr view --json statusCheckRollup` exports it.
+        fn run_row(
+            name: &str,
+            wf: &str,
+            started: Option<&str>,
+            conclusion: &str,
+            run: u64,
+        ) -> RawCheck {
+            serde_json::from_value(serde_json::json!({
+                "__typename": "CheckRun",
+                "name": name,
+                "workflowName": wf,
+                "status": "COMPLETED",
+                "conclusion": conclusion,
+                "startedAt": started,
+                "detailsUrl": format!("https://github.com/o/r/actions/runs/{run}/job/{run}0"),
+            }))
+            .unwrap()
+        }
+
+        fn context_row(context: &str, started: &str, state: &str) -> RawCheck {
+            serde_json::from_value(serde_json::json!({
+                "__typename": "StatusContext",
+                "context": context,
+                "state": state,
+                "startedAt": started,
+                "targetUrl": format!("https://ci.example/{started}"),
+            }))
+            .unwrap()
+        }
+
+        fn event(name: &str, wf: &str, started: Option<&str>, event: &str) -> CheckRunEvent {
+            CheckRunEvent {
+                name: name.into(),
+                started_at: started.map(String::from),
+                event: event.into(),
+                workflow: wf.into(),
+            }
+        }
+
+        fn run_ids(checks: &[PrCheckOut]) -> Vec<&str> {
+            checks
+                .iter()
+                .map(|c| c.run_id.as_deref().unwrap_or(""))
+                .collect()
+        }
+
+        const T1: &str = "2026-09-26T10:00:01Z";
+        const T2: &str = "2026-09-26T10:00:02Z";
+        const T3: &str = "2026-09-26T10:00:03Z";
+        const T4: &str = "2026-09-26T10:00:04Z";
+        const T5: &str = "2026-09-26T10:00:05Z";
+
+        /// Five runs of one key, listed out of time order: 1 failure, 2 cancelled,
+        /// 2 success, the newest a success.
+        fn superseded_fragment_runs() -> (Vec<RawCheck>, Vec<CheckRunEvent>) {
+            let rows = vec![
+                run_row("fragment", "changelog", Some(T3), "SUCCESS", 3),
+                run_row("fragment", "changelog", Some(T1), "FAILURE", 1),
+                run_row("fragment", "changelog", Some(T5), "SUCCESS", 5),
+                run_row("fragment", "changelog", Some(T2), "CANCELLED", 2),
+                run_row("fragment", "changelog", Some(T4), "CANCELLED", 4),
+            ];
+            let events = [T1, T2, T3, T4, T5]
+                .iter()
+                .map(|t| event("fragment", "changelog", Some(t), "pull_request"))
+                .collect();
+            (rows, events)
+        }
+
+        #[test]
+        fn superseded_runs_of_one_key_collapse_to_the_newest() {
+            let (rows, events) = superseded_fragment_runs();
+            let checks = map_gh_checks(rows, Some(&events));
+            assert_eq!(checks.len(), 1);
+            assert_eq!(checks[0].status, "SUCCESS");
+            assert_eq!(checks[0].started_at.as_deref(), Some(T5));
+            assert_eq!(run_ids(&checks), ["5"]);
+        }
+
+        #[test]
+        fn push_and_pull_request_twins_are_both_kept() {
+            let rows = vec![
+                run_row("build", "ci", Some(T1), "FAILURE", 1),
+                run_row("build", "ci", Some(T2), "SUCCESS", 2),
+            ];
+            let events = [
+                event("build", "ci", Some(T1), "push"),
+                event("build", "ci", Some(T2), "pull_request"),
+            ];
+            assert_eq!(run_ids(&map_gh_checks(rows, Some(&events))), ["1", "2"]);
+        }
+
+        #[test]
+        fn same_name_in_different_workflows_is_kept() {
+            let rows = vec![
+                run_row("build", "frontend", Some(T1), "FAILURE", 1),
+                run_row("build", "backend", Some(T2), "SUCCESS", 2),
+            ];
+            let events = [
+                event("build", "frontend", Some(T1), "pull_request"),
+                event("build", "backend", Some(T2), "pull_request"),
+            ];
+            assert_eq!(run_ids(&map_gh_checks(rows, Some(&events))), ["1", "2"]);
+        }
+
+        #[test]
+        fn unkeyable_rows_are_kept_while_keyable_siblings_collapse() {
+            let rows = vec![
+                // No workflow (a third-party check run): never keyed, even when joined.
+                run_row("Cloudflare Pages", "", Some(T1), "FAILURE", 1),
+                run_row("Cloudflare Pages", "", Some(T2), "SUCCESS", 2),
+                // Absent from the GraphQL answer.
+                run_row("lint", "ci", Some(T1), "FAILURE", 3),
+                run_row("lint", "ci", Some(T2), "SUCCESS", 4),
+                // Ambiguous join: two answer rows share its name, workflow and start.
+                run_row("test", "ci", Some(T1), "FAILURE", 5),
+                run_row("test", "ci", Some(T2), "SUCCESS", 6),
+                // Joined, but with an empty event.
+                run_row("docs", "ci", Some(T1), "FAILURE", 7),
+                run_row("docs", "ci", Some(T2), "SUCCESS", 8),
+                // Keyable pair.
+                run_row("fragment", "changelog", Some(T1), "FAILURE", 9),
+                run_row("fragment", "changelog", Some(T2), "SUCCESS", 10),
+            ];
+            let events = [
+                event("Cloudflare Pages", "", Some(T1), "pull_request"),
+                event("Cloudflare Pages", "", Some(T2), "pull_request"),
+                event("test", "ci", Some(T1), "pull_request"),
+                event("test", "ci", Some(T1), "push"),
+                event("test", "ci", Some(T2), "pull_request"),
+                event("docs", "ci", Some(T1), ""),
+                event("docs", "ci", Some(T2), "pull_request"),
+                event("fragment", "changelog", Some(T1), "pull_request"),
+                event("fragment", "changelog", Some(T2), "pull_request"),
+            ];
+            assert_eq!(
+                run_ids(&map_gh_checks(rows, Some(&events))),
+                ["1", "2", "3", "4", "5", "6", "7", "8", "10"]
+            );
+        }
+
+        #[test]
+        fn a_row_without_a_typename_or_workflow_field_is_never_keyed() {
+            // An old gh exports neither `__typename` nor `workflowName`.
+            let old = |started: &str, run: u64| -> RawCheck {
+                serde_json::from_value(serde_json::json!({
+                    "name": "fragment",
+                    "conclusion": "FAILURE",
+                    "startedAt": started,
+                    "detailsUrl": format!("https://github.com/o/r/actions/runs/{run}"),
+                }))
+                .unwrap()
+            };
+            let events = [
+                event("fragment", "", Some(T1), "pull_request"),
+                event("fragment", "", Some(T2), "pull_request"),
+            ];
+            let checks = map_gh_checks(vec![old(T1, 1), old(T2, 2)], Some(&events));
+            assert_eq!(run_ids(&checks), ["1", "2"]);
+        }
+
+        /// Undated rows are never keyed, so a queued re-run shows beside the failure it
+        /// retries until it starts; the refetch after that collapses the pair.
+        #[test]
+        fn a_queued_rerun_stays_beside_its_dated_predecessor_until_it_starts() {
+            for undated in [None, Some("0001-01-01T00:00:00Z")] {
+                let mut queued = run_row("fragment", "changelog", undated, "", 2);
+                queued.status = "QUEUED".into();
+                let rows = vec![
+                    queued,
+                    run_row("fragment", "changelog", Some(T5), "FAILURE", 1),
+                ];
+                let events = [
+                    event("fragment", "changelog", None, "pull_request"),
+                    event("fragment", "changelog", Some(T5), "pull_request"),
+                ];
+                let checks = map_gh_checks(rows, Some(&events));
+                assert_eq!(run_ids(&checks), ["2", "1"], "undated = {undated:?}");
+            }
+            // Once started, the re-run is dated and replaces the failure.
+            const T6: &str = "2026-09-26T10:00:06Z";
+            let rows = vec![
+                run_row("fragment", "changelog", Some(T5), "FAILURE", 1),
+                run_row("fragment", "changelog", Some(T6), "SUCCESS", 2),
+            ];
+            let events = [
+                event("fragment", "changelog", Some(T5), "pull_request"),
+                event("fragment", "changelog", Some(T6), "pull_request"),
+            ];
+            assert_eq!(run_ids(&map_gh_checks(rows, Some(&events))), ["2"]);
+        }
+
+        /// The events query and `gh pr view` run concurrently, so on one head the events
+        /// can hold a queued run that was cancelled before the view saw its successor.
+        /// A lone undated entry is then a false single hit; keying on it would file
+        /// the new run under the old event and hide the dated failure of that event.
+        #[test]
+        fn an_undated_row_never_joins_even_a_single_undated_entry() {
+            let mut queued = run_row("build", "ci", None, "", 2);
+            queued.status = "QUEUED".into();
+            let rows = vec![run_row("build", "ci", Some(T1), "FAILURE", 1), queued];
+            let events = [
+                event("build", "ci", Some(T1), "push"),
+                event("build", "ci", None, "push"),
+            ];
+            let checks = map_gh_checks(rows, Some(&events));
+            assert_eq!(run_ids(&checks), ["1", "2"]);
+            assert_eq!(checks[0].status, "FAILURE");
+        }
+
+        /// A run cancelled while still queued never gains a start, so, like every
+        /// undated row, it is never keyed and never drops or buries the run beside it.
+        fn cancelled_before_start(undated: Option<&str>, completed: &str, run: u64) -> RawCheck {
+            let mut relic = run_row("fragment", "changelog", undated, "CANCELLED", run);
+            relic.completed_at = Some(completed.into());
+            relic
+        }
+
+        #[test]
+        fn a_run_cancelled_before_it_started_is_never_collapsed() {
+            for undated in [None, Some("0001-01-01T00:00:00Z")] {
+                // The relic predates the success that replaced it.
+                let rows = vec![
+                    run_row("fragment", "changelog", Some(T3), "SUCCESS", 2),
+                    cancelled_before_start(undated, T2, 1),
+                ];
+                let events = [
+                    event("fragment", "changelog", Some(T3), "pull_request"),
+                    event("fragment", "changelog", None, "pull_request"),
+                ];
+                let checks = map_gh_checks(rows, Some(&events));
+                assert_eq!(run_ids(&checks), ["2", "1"], "undated = {undated:?}");
+            }
+        }
+
+        #[test]
+        fn a_newer_cancelled_before_start_run_stays_beside_an_older_success() {
+            for undated in [None, Some("0001-01-01T00:00:00Z")] {
+                // The mirror: the cancellation is the newer attempt, and a required
+                // check's outstanding cancel must stay visible beside the old success.
+                let mut success = run_row("fragment", "changelog", Some(T1), "SUCCESS", 1);
+                success.completed_at = Some(T2.into());
+                let rows = vec![cancelled_before_start(undated, T4, 2), success];
+                let events = [
+                    event("fragment", "changelog", None, "pull_request"),
+                    event("fragment", "changelog", Some(T1), "pull_request"),
+                ];
+                let checks = map_gh_checks(rows, Some(&events));
+                assert_eq!(run_ids(&checks), ["2", "1"], "undated = {undated:?}");
+                assert_eq!(checks[0].status, "CANCELLED");
+            }
+        }
+
+        #[test]
+        fn a_start_tie_goes_to_the_later_row() {
+            let rows = vec![
+                run_row("fragment", "changelog", Some(T1), "FAILURE", 1),
+                run_row("fragment", "changelog", Some(T1), "SUCCESS", 2),
+            ];
+            // One answer row for the shared start keeps the join unambiguous.
+            let events = [event("fragment", "changelog", Some(T1), "pull_request")];
+            assert_eq!(run_ids(&map_gh_checks(rows, Some(&events))), ["2"]);
+        }
+
+        #[test]
+        fn status_contexts_collapse_to_the_newest_per_context() {
+            let rows = vec![
+                context_row("CodeRabbit", T3, "SUCCESS"),
+                context_row("CodeRabbit", T1, "FAILURE"),
+                context_row("ci/jenkins", T2, "PENDING"),
+            ];
+            let checks = map_gh_checks(rows, None);
+            let got: Vec<(&str, &str)> = checks
+                .iter()
+                .map(|c| (c.name.as_str(), c.status.as_str()))
+                .collect();
+            assert_eq!(got, [("CodeRabbit", "SUCCESS"), ("ci/jenkins", "PENDING")]);
+        }
+
+        #[test]
+        fn a_failed_event_fetch_keeps_every_check_run_but_still_collapses_contexts() {
+            // Check runs come through byte-identical to the per-row mapping; the
+            // context arm keys on view data alone, so its duplicate still collapses.
+            let (mut rows, _) = superseded_fragment_runs();
+            rows.push(context_row("CodeRabbit", T1, "FAILURE"));
+            rows.push(context_row("CodeRabbit", T2, "SUCCESS"));
+            let baseline: Vec<PrCheckOut> = superseded_fragment_runs()
+                .0
+                .into_iter()
+                .chain([context_row("CodeRabbit", T2, "SUCCESS")])
+                .map(map_gh_check)
+                .collect();
+            assert_eq!(baseline.len(), 6);
+            assert_eq!(
+                serde_json::to_string(&map_gh_checks(rows, None)).unwrap(),
+                serde_json::to_string(&baseline).unwrap()
+            );
+        }
+
+        #[test]
+        fn a_failed_fetch_on_the_same_head_collapses_from_the_memo() {
+            let mut memo = CheckRunEventsMemo::new();
+            let (rows, events) = superseded_fragment_runs();
+            let fresh = remember_or_recall_check_run_events(
+                &mut memo,
+                "o/r",
+                1,
+                Some(pinned(HEAD_A, events)),
+            );
+            assert!(fresh.is_some());
+            // The next refetch's events read fails on the same head: the memo stands
+            // in, so the collapse (and the failed count it feeds) holds steady.
+            let recalled = remember_or_recall_check_run_events(&mut memo, "o/r", 1, None);
+            let events = events_for_head(recalled, Some(HEAD_A));
+            assert_eq!(run_ids(&map_gh_checks(rows, events.as_deref())), ["5"]);
+            // Keyed per PR: another PR's failed fetch recalls nothing.
+            assert_eq!(
+                remember_or_recall_check_run_events(&mut memo, "o/r", 2, None),
+                None
+            );
+        }
+
+        /// The rows reuse the memoed starts so that only the head oid can refuse the
+        /// join.
+        #[test]
+        fn a_memo_from_another_head_never_collapses() {
+            let mut memo = CheckRunEventsMemo::new();
+            let (rows, events) = superseded_fragment_runs();
+            remember_or_recall_check_run_events(&mut memo, "o/r", 1, Some(pinned(HEAD_A, events)));
+            let recalled = remember_or_recall_check_run_events(&mut memo, "o/r", 1, None);
+            assert!(recalled.is_some());
+            let events = events_for_head(recalled, Some(HEAD_B));
+            assert_eq!(events, None);
+            assert_eq!(
+                run_ids(&map_gh_checks(rows, events.as_deref())),
+                ["3", "1", "5", "2", "4"]
+            );
+        }
+
+        #[test]
+        fn events_apply_only_to_a_known_matching_head() {
+            let fetched = || Some(pinned(HEAD_A, Vec::new()));
+            assert_eq!(events_for_head(fetched(), Some(HEAD_A)), Some(Vec::new()));
+            assert_eq!(events_for_head(fetched(), Some(HEAD_B)), None);
+            assert_eq!(events_for_head(fetched(), None), None);
+            assert_eq!(events_for_head(fetched(), Some("")), None);
+            assert_eq!(events_for_head(None, Some(HEAD_A)), None);
+        }
+
+        /// The gate reads the view's `headRefOid`; a view without one (absent or null)
+        /// leaves an empty oid, which refuses even a same-head recall.
+        #[test]
+        fn the_view_head_oid_feeds_the_gate_and_its_absence_refuses() {
+            let head_of = |json: &str| serde_json::from_str::<RawPr>(json).unwrap().head_ref_oid;
+            let (rows, events) = superseded_fragment_runs();
+            let mut memo = CheckRunEventsMemo::new();
+            remember_or_recall_check_run_events(&mut memo, "o/r", 1, Some(pinned(HEAD_A, events)));
+            let recall = |memo: &mut CheckRunEventsMemo| {
+                remember_or_recall_check_run_events(memo, "o/r", 1, None)
+            };
+
+            let head = head_of(&format!(r#"{{"headRefOid":"{HEAD_A}"}}"#));
+            let applied = events_for_head(recall(&mut memo), Some(head.as_str()));
+            assert_eq!(run_ids(&map_gh_checks(rows, applied.as_deref())), ["5"]);
+
+            for json in ["{}", r#"{"headRefOid":null}"#] {
+                let head = head_of(json);
+                assert_eq!(head, "", "json: {json}");
+                assert_eq!(
+                    events_for_head(recall(&mut memo), Some(head.as_str())),
+                    None
+                );
+            }
+        }
+
+        #[test]
+        fn the_events_memo_starts_over_at_its_cap() {
+            let mut memo = CheckRunEventsMemo::new();
+            let empty = || Some(pinned(HEAD_A, Vec::new()));
+            for n in 0..CHECK_RUN_EVENTS_MEMO_CAP as u64 {
+                remember_or_recall_check_run_events(&mut memo, "o/r", n, empty());
+            }
+            assert_eq!(memo.len(), CHECK_RUN_EVENTS_MEMO_CAP);
+            // Overwriting a held key never evicts.
+            remember_or_recall_check_run_events(&mut memo, "o/r", 0, empty());
+            assert_eq!(memo.len(), CHECK_RUN_EVENTS_MEMO_CAP);
+            // A new key past the cap clears, then records itself.
+            remember_or_recall_check_run_events(&mut memo, "o/r", 999, empty());
+            assert_eq!(memo.len(), 1);
+            assert!(memo.contains_key(&("o/r".to_string(), 999)));
+        }
+
+        #[test]
+        fn parses_check_run_events_and_skips_status_contexts() {
+            let body = r#"{"data":{"repository":{"pullRequest":{"commits":{"nodes":[{"commit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","statusCheckRollup":{"contexts":{"totalCount":3,"nodes":[
+                {"__typename":"CheckRun","name":"fragment","startedAt":"2026-09-26T10:00:01Z","checkSuite":{"workflowRun":{"event":"pull_request","workflow":{"name":"changelog"}}}},
+                {"__typename":"CheckRun","name":"Cloudflare Pages","startedAt":null,"checkSuite":{"workflowRun":null}},
+                {"__typename":"StatusContext"}
+            ]}}}}]}}}}}"#;
+            assert_eq!(
+                parse_check_run_events(body),
+                Some(pinned(
+                    HEAD_A,
+                    vec![
+                        event("fragment", "changelog", Some(T1), "pull_request"),
+                        event("Cloudflare Pages", "", None, ""),
+                    ]
+                ))
+            );
+        }
+
+        #[test]
+        fn refuses_a_partial_or_unreadable_answer() {
+            // More contexts than the one page fetched.
+            let truncated = r#"{"data":{"repository":{"pullRequest":{"commits":{"nodes":[{"commit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","statusCheckRollup":{"contexts":{"totalCount":101,"nodes":[]}}}}]}}}}}"#;
+            assert_eq!(parse_check_run_events(truncated), None);
+            assert_eq!(parse_check_run_events("not json"), None);
+            assert_eq!(
+                parse_check_run_events(r#"{"data":null,"errors":[{"message":"boom"}]}"#),
+                None
+            );
+            // No rollup at all (a commit with no checks).
+            let no_rollup = r#"{"data":{"repository":{"pullRequest":{"commits":{"nodes":[{"commit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","statusCheckRollup":null}}]}}}}}"#;
+            assert_eq!(parse_check_run_events(no_rollup), None);
+            // No head oid: the answer can't be pinned to a head, so it can't be used.
+            let no_oid = r#"{"data":{"repository":{"pullRequest":{"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}"#;
+            assert_eq!(parse_check_run_events(no_oid), None);
+            let with_oid = no_oid.replace(
+                r#"{"commit":{"#,
+                r#"{"commit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","#,
+            );
+            assert_eq!(
+                parse_check_run_events(&with_oid),
+                Some(pinned(HEAD_A, Vec::new())),
+                "the no-oid control differs only by the oid"
+            );
+        }
+
+        #[test]
+        fn the_event_query_is_single_pr_and_selects_the_join_key() {
+            let q = check_run_events_query("o", "r", 412);
+            assert!(q.contains(r#"repository(owner:"o", name:"r")"#), "{q}");
+            assert!(q.contains("pullRequest(number:412)"), "{q}");
+            for field in [
+                "oid statusCheckRollup",
+                "totalCount",
+                "startedAt",
+                "event",
+                "workflow{ name }",
+            ] {
+                assert!(q.contains(field), "{field} missing from: {q}");
+            }
+            // gh rejects an unbalanced query at parse time, and the substring
+            // asserts above cannot see a missing brace — balance is the contract.
+            assert_eq!(
+                q.matches('{').count(),
+                q.matches('}').count(),
+                "unbalanced braces in: {q}"
+            );
+        }
     }
 
     #[test]

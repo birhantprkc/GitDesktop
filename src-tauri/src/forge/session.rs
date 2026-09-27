@@ -250,11 +250,12 @@ async fn gh_status_json(hostname: Option<&str>) -> AppResult<GhJsonProbe> {
     Ok(GhJsonProbe::Parsed(parsed.hosts))
 }
 
-/// Whether a gh account's `error` text names a rate limit (primary or secondary, or
-/// older GHES's "abuse detection" wording for the latter), or is a 429. Substring
-/// matches, not exact ones: go-gh wraps the API message as
-/// `HTTP <code>: <message> (<url>)`, and the message wording varies by limit kind.
-fn gh_error_is_rate_limit(error: Option<&str>) -> bool {
+/// Whether gh error text (an account's `error`, or a failed command's stderr)
+/// names a rate limit (primary or secondary, or older GHES's "abuse detection"
+/// wording for the latter), or is a 429. Substring matches, not exact ones:
+/// go-gh wraps the API message as `HTTP <code>: <message> (<url>)`, and the
+/// message wording varies by limit kind.
+pub(crate) fn gh_error_is_rate_limit(error: Option<&str>) -> bool {
     error.is_some_and(|e| {
         let e = e.to_lowercase();
         e.contains("rate limit") || e.contains("abuse detection") || e.contains("http 429:")
@@ -307,6 +308,7 @@ async fn github_health(host: &str) -> SessionHealth {
     // ANTI-FLAP: a single `error` never yields Broken. Re-probe once ~1.5s later; the
     // re-probe's state wins (so a healed session reads Healthy). Only a confirmed
     // second error stays Broken.
+    let mut disproved = false;
     if needs_reprobe(health.state) {
         tokio::time::sleep(REPROBE_DELAY).await;
         if let Ok(GhJsonProbe::Parsed(map2)) = gh_status_json(Some(host)).await {
@@ -317,14 +319,45 @@ async fn github_health(host: &str) -> SessionHealth {
         }
         // A failed re-probe (Err/None) leaves the first Broken standing — the
         // credential really was rejected and we couldn't disprove it.
+        if health.state == SessionState::Broken {
+            let token_present = gh_token_present(host).await;
+            health = disprove_broken(health, token_present, gh_rate_limit_probe(host).await);
+            disproved = health.state == SessionState::RateLimited;
+        }
     }
 
     if health.state == SessionState::Healthy {
         apply_gh_expiry(&mut health, host).await;
     }
-    if health.state == SessionState::RateLimited {
+    // A disproved Broken already read its reset from the same response.
+    if health.state == SessionState::RateLimited && !disproved {
         health.reset_at = gh_rate_limit_reset(host).await;
     }
+    health
+}
+
+/// The confirmed-Broken disproof: gh words a REST secondary 403 as token-invalid.
+/// `rate_limit` is exempt from the primary quota and rejects an invalid token, but it
+/// also answers anonymous requests, so its success proves the credential only when gh
+/// had a token to send. Anything else leaves Broken standing, the safe side.
+fn disprove_broken(
+    mut health: SessionHealth,
+    token_present: bool,
+    rate_limit: AppResult<crate::github::runner::GhOutput>,
+) -> SessionHealth {
+    if !token_present {
+        return health;
+    }
+    let Ok(out) = rate_limit else {
+        return health;
+    };
+    if out.code != 0 {
+        return health;
+    }
+    health.state = SessionState::RateLimited;
+    // gh's token-invalid wording is exactly the misdirect this reclassifies.
+    health.detail = None;
+    health.reset_at = rate_limit_reset_header(&out.stdout_lossy());
     health
 }
 
@@ -406,13 +439,37 @@ fn gh_host_auth(probe: &GhJsonProbe, host: &str) -> Option<GhHostAuth> {
 /// Headers are read even on a non-zero exit (gh prints them before erroring); any
 /// failure yields `None`, never an error.
 async fn gh_rate_limit_reset(host: &str) -> Option<i64> {
-    let mut args: Vec<&str> = vec!["api", "-i", "rate_limit"];
-    if !host.is_empty() && host != "github.com" {
+    let out = gh_rate_limit_probe(host).await.ok()?;
+    rate_limit_reset_header(&out.stdout_lossy())
+}
+
+/// Whether gh resolves a token for `host`, from `gh auth token`'s exit code alone. A
+/// probe that fails to run reads absent, so the disproof fails closed.
+///
+/// SECURITY: `gh auth token`'s stdout IS the user's token — only the exit code is
+/// read; the output is dropped and never logged or formatted anywhere.
+async fn gh_token_present(host: &str) -> bool {
+    run_gh_raw(None, &["auth", "token", "--hostname", host], GH_TIMEOUT)
+        .await
+        .is_ok_and(|out| out.code == 0)
+}
+
+/// One `gh api -i rate_limit` call against `host`, raw.
+async fn gh_rate_limit_probe(host: &str) -> AppResult<crate::github::runner::GhOutput> {
+    run_gh_raw(None, &gh_api_host_args("rate_limit", host), GH_TIMEOUT).await
+}
+
+/// The argv for a host-scoped `gh api -i <endpoint>` read. `--hostname` is explicit
+/// even for github.com: gh otherwise resolves its host from an ambient `GH_HOST`, and
+/// the reading must describe the host it was asked about. Callers always pass a
+/// resolved host; an empty one would fall back to gh's default.
+fn gh_api_host_args<'a>(endpoint: &'a str, host: &'a str) -> Vec<&'a str> {
+    let mut args: Vec<&str> = vec!["api", "-i", endpoint];
+    if !host.is_empty() {
         args.push("--hostname");
         args.push(host);
     }
-    let out = run_gh_raw(None, &args, GH_TIMEOUT).await.ok()?;
-    rate_limit_reset_header(&out.stdout_lossy())
+    args
 }
 
 /// The `x-ratelimit-reset` header as positive epoch seconds, kept ONLY when
@@ -584,12 +641,7 @@ fn gh_accounts_need_reprobe(map: &HashMap<String, Vec<GhJsonAccount>>) -> bool {
 /// and is known-buggy for fine-grained PATs, so absence/garbage is tolerated and
 /// never flips the already-decided Healthy state.
 async fn apply_gh_expiry(health: &mut SessionHealth, host: &str) {
-    let mut args: Vec<&str> = vec!["api", "-i", "user"];
-    if !host.is_empty() && host != "github.com" {
-        args.push("--hostname");
-        args.push(host);
-    }
-    let Ok(out) = run_gh_raw(None, &args, GH_TIMEOUT).await else {
+    let Ok(out) = run_gh_raw(None, &gh_api_host_args("user", host), GH_TIMEOUT).await else {
         return; // network/timeout: don't touch the decided health.
     };
     if out.code != 0 {
@@ -1913,6 +1965,92 @@ mod tests {
         let probe = GhJsonProbe::Inconclusive(Some("could not read config".into()));
         assert!(gh_host_auth(&probe, "github.com").is_none());
         assert!(gh_host_auth(&GhJsonProbe::Inconclusive(None), "github.com").is_none());
+    }
+
+    // ── github_health's confirmed-Broken disproof ──
+    /// gh's auth probe words a REST secondary 403 like a dead token.
+    const GH_TOKEN_INVALID: &str = "The token in keyring is invalid.";
+
+    /// The per-repo reading after the anti-flap re-probe also came back Broken.
+    fn confirmed_broken() -> SessionHealth {
+        let first = classify_gh_host(&one_account("error", Some(GH_TOKEN_INVALID))["github.com"]);
+        assert!(needs_reprobe(first.state));
+        let second = classify_gh_host(&one_account("error", Some(GH_TOKEN_INVALID))["github.com"]);
+        assert_eq!(second.state, SessionState::Broken);
+        second
+    }
+
+    fn gh_out(code: i32, stdout: &str) -> crate::github::runner::GhOutput {
+        crate::github::runner::GhOutput {
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: String::new(),
+            code,
+        }
+    }
+
+    #[test]
+    fn disproof_reclassifies_broken_when_rate_limit_succeeds() {
+        let exhausted = "HTTP/2.0 200 OK\r\nX-Ratelimit-Remaining: 0\r\nX-Ratelimit-Reset: 1790000000\r\n\r\n{}";
+        let health = disprove_broken(confirmed_broken(), true, Ok(gh_out(0, exhausted)));
+        assert_eq!(health.state, SessionState::RateLimited);
+        assert_eq!(health.reset_at, Some(1_790_000_000));
+        assert_eq!(health.login.as_deref(), Some("theBGuy"));
+        assert_eq!(
+            health.detail, None,
+            "the token-invalid wording must not ride along"
+        );
+        // A secondary limit leaves core quota, so no reset time is claimed.
+        let secondary = "HTTP/2.0 200 OK\r\nX-Ratelimit-Remaining: 4999\r\nX-Ratelimit-Reset: 1790000000\r\n\r\n{}";
+        let health = disprove_broken(confirmed_broken(), true, Ok(gh_out(0, secondary)));
+        assert_eq!(health.state, SessionState::RateLimited);
+        assert_eq!(health.reset_at, None);
+    }
+
+    #[test]
+    fn disproof_keeps_broken_when_no_token_was_sent() {
+        // rate_limit answers anonymously, so a 200 without a token proves nothing.
+        let anonymous = "HTTP/2.0 200 OK\r\nX-Ratelimit-Limit: 60\r\nX-Ratelimit-Remaining: 59\r\nX-Ratelimit-Reset: 1790000000\r\n\r\n{}";
+        let health = disprove_broken(confirmed_broken(), false, Ok(gh_out(0, anonymous)));
+        assert_eq!(health.state, SessionState::Broken);
+        assert_eq!(health.detail.as_deref(), Some(GH_TOKEN_INVALID));
+        assert_eq!(health.reset_at, None);
+    }
+
+    #[test]
+    fn gh_api_reads_pin_the_host_even_for_github_com() {
+        // An ambient GH_HOST must never redirect the disproof or the expiry read to
+        // another host's token.
+        for endpoint in ["rate_limit", "user"] {
+            let hostname = |host| {
+                let args = gh_api_host_args(endpoint, host);
+                assert_eq!(args[..3], ["api", "-i", endpoint]);
+                args.windows(2)
+                    .find(|w| w[0] == "--hostname")
+                    .map(|w| w[1].to_string())
+            };
+            assert_eq!(hostname("github.com").as_deref(), Some("github.com"));
+            assert_eq!(hostname("ghes.example").as_deref(), Some("ghes.example"));
+            assert_eq!(
+                hostname("ghes.example:8443").as_deref(),
+                Some("ghes.example:8443")
+            );
+            assert_eq!(gh_api_host_args(endpoint, ""), ["api", "-i", endpoint]);
+        }
+    }
+
+    #[test]
+    fn disproof_keeps_broken_when_rate_limit_fails() {
+        let revoked = "HTTP/2.0 401 Unauthorized\r\n\r\n{\"message\":\"Bad credentials\"}";
+        for probe in [
+            Ok(gh_out(1, revoked)),
+            Err(AppError::Timeout(15)),
+            Err(AppError::GhNotFound),
+        ] {
+            let health = disprove_broken(confirmed_broken(), true, probe);
+            assert_eq!(health.state, SessionState::Broken);
+            assert_eq!(health.detail.as_deref(), Some(GH_TOKEN_INVALID));
+            assert_eq!(health.reset_at, None);
+        }
     }
 
     #[test]
