@@ -417,10 +417,33 @@ pub async fn git_worktree_repair(
 /// different worktree. Unresolvable paths (already deleted) fall back to the raw
 /// form; both sides get the same treatment, so quirks cancel out.
 pub(crate) fn canonical_wt_path(p: &str) -> String {
-    let resolved = std::fs::canonicalize(p)
+    let resolved = dunce::canonicalize(p)
         .map(|c| c.to_string_lossy().into_owned())
         .unwrap_or_else(|_| p.to_string());
-    normalize_wt_path(resolved.strip_prefix(r"\\?\").unwrap_or(&resolved))
+    normalize_wt_path(&strip_verbatim(&resolved))
+}
+
+/// Unwraps a Windows verbatim spelling to the form git prints. `dunce` drops the
+/// prefix only from drive paths it can express plainly (dunce 1.0.5 keeps it past
+/// MAX_PATH, on reserved names, and on every UNC share), so both leftover forms land
+/// here: `\\?\UNC\server\share` must fold to git's `//server/share`, never
+/// `unc/server/share`. Pure string work, so tests never touch the filesystem.
+///
+/// The UNC prefix matches case-insensitively, as Windows parses it: the
+/// canonicalize-failed fallback passes a caller's own spelling through here.
+fn strip_verbatim(resolved: &str) -> String {
+    const VERBATIM_UNC: &str = r"\\?\UNC\";
+    let is_unc = resolved
+        .get(..VERBATIM_UNC.len())
+        .is_some_and(|p| p.eq_ignore_ascii_case(VERBATIM_UNC));
+    if is_unc {
+        // ASCII prefix matched, so its length is a char boundary.
+        return format!(r"\\{}", &resolved[VERBATIM_UNC.len()..]);
+    }
+    resolved
+        .strip_prefix(r"\\?\")
+        .unwrap_or(resolved)
+        .to_string()
 }
 
 /// Whether git still lists `path` as a LIVE worktree of the repo. An unreadable
@@ -885,6 +908,21 @@ mod tests {
     #[test]
     fn repo_hash_distinguishes_separator_spellings() {
         assert_ne!(repo_hash(r"C:\repos\x"), repo_hash("c:/repos/x"));
+    }
+
+    /// Verbatim spellings fold to the form git prints: a UNC share to `//server/share`
+    /// (never `unc/server/share`), a drive path to `c:/…`, and a plain path passes
+    /// through. Pure strings, so no share lookup ever runs.
+    #[test]
+    fn strip_verbatim_unwraps_verbatim_spellings_to_gits_form() {
+        let folded = |p: &str| normalize_wt_path(&strip_verbatim(p));
+        assert_eq!(
+            folded(r"\\?\UNC\server\share\repo\.git"),
+            "//server/share/repo/.git"
+        );
+        assert_eq!(folded(r"\\?\unc\server\share\x"), "//server/share/x");
+        assert_eq!(folded(r"\\?\Z:\dir\repo"), "z:/dir/repo");
+        assert_eq!(folded(r"C:\dir\repo"), "c:/dir/repo");
     }
 
     #[test]
