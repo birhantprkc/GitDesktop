@@ -17,6 +17,7 @@ import { ConversationListPanel } from "@/features/conversations/ConversationList
 import { ConversationPresetSwitcher } from "@/features/conversations/ConversationPresetSwitcher";
 import { PAGE_SIZE } from "@/features/conversations/LoadMoreRow";
 import { RepoLensSwitcher } from "@/features/conversations/RepoLensSwitcher";
+import { DEGRADED_ACTION_CLASS } from "@/features/conversations/remote-section-state";
 import { useCollapsedSections } from "@/features/conversations/useCollapsedSections";
 import { useLocalRemoteFilter } from "@/features/conversations/useLocalRemoteFilter";
 import {
@@ -592,6 +593,8 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
             </div>
           )
         }
+        // Disabled issues are a permanent repo condition a retry can't clear.
+        remoteRetry={issuesDisabled ? undefined : () => issueList.refetch()}
         // More may exist server-side exactly when this page filled the requested
         // limit (compared against the raw loaded count, not the filtered view).
         hasMore={(issueList.data?.length ?? 0) === limit}
@@ -728,6 +731,21 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
                 emptyLabel: `No ${stateFilter} issues in ${link.projectKey} — switch the filter or view the project in Jira.`,
               }
             : undefined
+        }
+        jiraRetry={() => jiraIssues.refetch()}
+        // Beside Retry, since an expired credential fails every retry and
+        // cached rows keep the no-rows Reconnect slot from rendering.
+        jiraDegradedAction={
+          link ? (
+            <button
+              type="button"
+              aria-label={`Reconnect ${link.projectKey}`}
+              onClick={() => setJiraOpen(true)}
+              className={DEGRADED_ACTION_CLASS}
+            >
+              Reconnect
+            </button>
+          ) : undefined
         }
       >
         <CreateIssueDialog
