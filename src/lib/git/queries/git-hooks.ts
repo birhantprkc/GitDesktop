@@ -25,25 +25,54 @@ export function useHookContent(repo: string, name: string | null) {
 }
 
 export function useWriteHook(repo: string) {
-  return useRepoMutation(repo, (args: { name: string; content: string }) =>
-    api.gitHookWrite(repo, args.name, args.content),
+  return useRepoMutation(
+    repo,
+    (args: { name: string; content: string }) =>
+      api.gitHookWrite(repo, args.name, args.content),
+    {
+      // Local hook write — never park it offline.
+      networkMode: "always",
+    },
   );
 }
 
 export function useSetHookEnabled(repo: string) {
-  return useRepoMutation(repo, (args: { name: string; enabled: boolean }) =>
-    api.gitHookSetEnabled(repo, args.name, args.enabled),
+  return useRepoMutation(
+    repo,
+    (args: { name: string; enabled: boolean }) =>
+      api.gitHookSetEnabled(repo, args.name, args.enabled),
+    {
+      // Local hook write — never park it offline.
+      networkMode: "always",
+    },
   );
 }
 
 export function useDeleteHook(repo: string) {
-  return useRepoMutation(repo, (name: string) => api.gitHookDelete(repo, name));
-}
-
-export function useRunHookManager(repo: string) {
   return useRepoMutation(
     repo,
-    (args: { manager: string; action: "install" | "update" }) =>
-      api.gitRunHookManager(repo, args.manager, args.action),
+    (name: string) => api.gitHookDelete(repo, name),
+    {
+      // Local hook write — never park it offline.
+      networkMode: "always",
+    },
+  );
+}
+
+export function useInstallHookManager(repo: string) {
+  return useRepoMutation(
+    repo,
+    (manager: string) => api.gitInstallHookManager(repo, manager),
+    {
+      // Local hook write — never park it offline.
+      networkMode: "always",
+    },
+  );
+}
+
+/** pre-commit `autoupdate` fetches, so it keeps the default and pauses offline. */
+export function useUpdateHookManager(repo: string) {
+  return useRepoMutation(repo, (manager: string) =>
+    api.gitUpdateHookManager(repo, manager),
   );
 }
