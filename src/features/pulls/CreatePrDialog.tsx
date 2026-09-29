@@ -266,7 +266,8 @@ export function CreatePrDialog({
   const isGitLab = forge.data?.provider === "gitlab";
   const remoteLabel = providerLabel(forge.data?.provider);
   const prNoun = isGitLab ? "merge request" : "pull request";
-  const { generate, cancel, generating } = useGeneratePrDescription(repoPath);
+  const { generate, cancel, generating, pickingLabels } =
+    useGeneratePrDescription(repoPath);
   const aiEnabled = useAiEnabled();
   // Closing mid-generation never cancels the run: it finishes into the retained
   // form state, and this surfaces the result while the dialog is away. Both
@@ -935,7 +936,14 @@ export function CreatePrDialog({
       jiraCandidates,
     ).then(
       (final) => {
-        if (final) setDroppedLabels(final.droppedLabels);
+        if (final) {
+          setDroppedLabels(final.droppedLabels);
+          // The post-stream label pick arrives only here, so title and body the
+          // user edited meanwhile stay theirs. Additive, like the streamed labels.
+          const picked = final.pickedLabels ?? [];
+          if (picked.length > 0)
+            setLabels((prev) => new Set([...prev, ...picked]));
+        }
         surface.noteRunSettled(final !== null);
       },
       // Two-arm, never a trailing .catch: a settle must be reported exactly
@@ -1256,9 +1264,18 @@ export function CreatePrDialog({
                   role="status"
                   className="mt-1.5 text-xs text-muted-foreground empty:mt-0"
                 >
-                  {droppedLabels.length > 0
-                    ? droppedLabelsHint(droppedLabels)
-                    : ""}
+                  {(() => {
+                    switch (true) {
+                      // The draft already looks finished while the post-stream
+                      // label pick runs, so say what the wait is for.
+                      case pickingLabels:
+                        return "Choosing labels…";
+                      case droppedLabels.length > 0:
+                        return droppedLabelsHint(droppedLabels);
+                      default:
+                        return "";
+                    }
+                  })()}
                 </p>
               </div>
             )}

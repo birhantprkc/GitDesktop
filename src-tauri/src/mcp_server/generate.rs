@@ -1043,7 +1043,7 @@ fn assemble_pr_recipe(p: PrPieces) -> Recipe {
             .collect::<Vec<_>>()
             .join("\n");
         system_parts.push(format!(
-            "## Labels\n{label_lines}\nLabels are optional metadata: for most changes the right outcome is one label or none — never force one. Suggest a label ONLY when the change as a whole is what that label is for, judged by its stated purpose above (or by an unambiguous name when it has no description). Some labels belong to automation or maintainer workflows rather than to authors: dependency-bot ecosystem labels (a language or tooling name described like \"Pull requests that update … code\", which bots apply to dependency bumps), changelog or release controls, and triage states. Never suggest those for ordinary code changes — only when the change is precisely that case (for example, a PR that does nothing but bump dependencies).\nAfter the description, if any label qualifies, add a final line exactly like `Labels: name1, name2` listing ONLY label names from the list above, copied verbatim. When the change clearly matches a label's stated purpose — a bug-fix PR where a \"bug\" label exists — propose that label rather than abstaining. Omit the line entirely when none qualify — never invent a label."
+            "## Labels\n{label_lines}\nLabels are optional metadata: for most changes the right outcome is one label or none — never force one. Suggest a label ONLY when the change as a whole is what that label is for, judged by its stated purpose above (or by an unambiguous name when it has no description). Some labels belong to automation or maintainer workflows rather than to authors: dependency-bot ecosystem labels (a language or tooling name described like \"Pull requests that update … code\", which bots apply to dependency bumps), changelog or release controls, and triage states. Never suggest those for ordinary code changes — only when the change is precisely that case (for example, a PR that does nothing but bump dependencies).\nAfter the description, always add a final line exactly like `Labels: name1, name2` listing ONLY label names from the list above, copied verbatim. When the change clearly matches a label's stated purpose — a bug-fix PR where a \"bug\" label exists — propose that label rather than abstaining. When no label qualifies, write exactly `Labels: none` — never omit the line, and never invent a label."
         ));
     }
 
@@ -1076,13 +1076,20 @@ fn assemble_pr_recipe(p: PrPieces) -> Recipe {
          related changes by theme under `###` headings when the diff touches several areas, citing \
          the files involved."
     );
+    // With labels the output shape is restated in full after the diff (mirrors the TS
+    // closing; scripts/checks.test.mjs pins the shared sentences in both files).
     if !labels.is_empty() {
-        closing.push_str(
-            " Then, if any of the repository's labels qualify, end with a single `Labels:` line as \
-             instructed.",
-        );
-    }
-    if has_candidates {
+        let issues = if has_candidates {
+            ", then the `Closes:` / `Relates:` line(s) for any qualifying issue"
+        } else if has_jira {
+            ", then the `Relates:` line for any qualifying issue"
+        } else {
+            ""
+        };
+        closing.push_str(&format!(
+            " Output the title on the first line, a blank line, the description, then the final `Labels:` line (`Labels: none` when no label qualifies){issues}."
+        ));
+    } else if has_candidates {
         closing.push_str(
             " Then, if any of the listed related issues qualify, end with the `Closes:` / `Relates:` \
              line(s) as instructed.",
@@ -1103,6 +1110,15 @@ fn assemble_pr_recipe(p: PrPieces) -> Recipe {
     } else {
         format!(" and no issue/{abbrev} references")
     };
+    // The in-app parser strips the required `Labels:` line; an MCP client has no such
+    // step, so the note tells it the line is metadata for create_pull_request.
+    let labels_tail = if labels.is_empty() {
+        ""
+    } else {
+        " The `Labels:` line after the description is metadata, not description: leave it \
+         out of the body you submit and pass its names as create_pull_request's `labels` \
+         (no labels for `Labels: none`)."
+    };
     Recipe {
         system: system_parts.join("\n\n"),
         prompt: prompt_parts.join("\n\n"),
@@ -1110,7 +1126,8 @@ fn assemble_pr_recipe(p: PrPieces) -> Recipe {
             &format!("{pr_noun} title and description"),
             &format!(
                 "The first line is the {pr_noun} title (imperative, no trailing period), then a \
-                 blank line, then the description in {}, with no code fences{note_tail}.",
+                 blank line, then the description in {}, with no code fences{note_tail}.\
+                 {labels_tail}",
                 copy.markdown_flavor
             ),
         ),
@@ -1810,7 +1827,9 @@ impl GitDesktopMcp {
                        as one ready-to-complete message. Defaults: base = the repo's default branch, \
                        head = the current branch. The user's AI-ignore patterns are applied to the \
                        diff and the withheld file count is disclosed in the prompt. Your model \
-                       completes it and the result is the PR/MR title and description. Errors when \
+                       completes it and the result is the PR/MR title and description, plus a \
+                       `Labels:` metadata line when the repo has labels (the returned description \
+                       says how to use it). Errors when \
                        the range has no changes, or when all of them match those patterns."
     )]
     async fn pr_description_prompt(
@@ -2424,8 +2443,82 @@ mod tests {
         assert!(recipe
             .system
             .contains("for most changes the right outcome is one label or none"));
+        // The Labels line is required, with an explicit escape.
+        assert!(recipe.system.contains(LABELS_REQUIRED));
+        assert!(!recipe.system.contains("Omit the line entirely"));
+        // The prompt's end restates the output shape, with no issue trailer here.
+        assert!(recipe.prompt.ends_with(&format!("{LABELS_SHAPE}.")));
         // Note restates MR wording.
         assert!(recipe.note.contains("merge request title"));
+    }
+
+    const LABELS_REQUIRED: &str = "When no label qualifies, write exactly `Labels: none` — never omit the line, and never invent a label.";
+    const LABELS_SHAPE: &str = " Output the title on the first line, a blank line, the description, then the final `Labels:` line (`Labels: none` when no label qualifies)";
+
+    #[test]
+    fn pr_recipe_label_closing_carries_the_issue_trailer_in_order() {
+        let with = |candidate_issues: Vec<IssueCandidate>, jira_candidates: Vec<JiraCandidate>| {
+            assemble_pr_recipe(PrPieces {
+                diff_text: String::new(),
+                diff_truncated: false,
+                files: vec![],
+                excluded_files: 0,
+                commit_subjects: vec![],
+                base_branch: "main".to_string(),
+                head_branch: "topic".to_string(),
+                available_labels: vec![("bug".to_string(), None)],
+                candidate_issues,
+                jira_candidates,
+                repo_instructions: None,
+                global_instructions: String::new(),
+                provider: Some("github".to_string()),
+            })
+        };
+        let native = with(vec![candidate(12, "Crash", "OPEN")], vec![]);
+        assert!(native.prompt.ends_with(&format!(
+            "{LABELS_SHAPE}, then the `Closes:` / `Relates:` line(s) for any qualifying issue."
+        )));
+        // The shape sentence replaces the per-section clauses rather than repeating them.
+        assert!(!native.prompt.contains("as instructed"));
+        let jira = with(vec![], vec![jira_candidate("MYT-1", "Fix login", "new")]);
+        assert!(jira.prompt.ends_with(&format!(
+            "{LABELS_SHAPE}, then the `Relates:` line for any qualifying issue."
+        )));
+        assert!(!jira.prompt.contains("as instructed"));
+    }
+
+    #[test]
+    fn pr_recipe_note_marks_the_labels_line_as_metadata_only_when_labels_exist() {
+        const METADATA: &str = "The `Labels:` line after the description is metadata";
+        let with_labels = |available_labels: Vec<(String, Option<String>)>| {
+            assemble_pr_recipe(PrPieces {
+                diff_text: String::new(),
+                diff_truncated: false,
+                files: vec![],
+                excluded_files: 0,
+                commit_subjects: vec![],
+                base_branch: "main".to_string(),
+                head_branch: "topic".to_string(),
+                available_labels,
+                candidate_issues: vec![],
+                jira_candidates: vec![],
+                repo_instructions: None,
+                global_instructions: String::new(),
+                provider: Some("github".to_string()),
+            })
+        };
+        let labelled = with_labels(vec![("bug".to_string(), None)]);
+        assert!(labelled.note.contains(METADATA), "{}", labelled.note);
+        assert!(labelled.note.contains("create_pull_request's `labels`"));
+        // The MCP prompt surface carries the same note as its description.
+        let prompt = recipe_as_prompt(labelled);
+        assert!(prompt
+            .description
+            .as_deref()
+            .is_some_and(|d| d.contains(METADATA)));
+        // No labels offered, no Labels line asked for, so nothing to explain.
+        let bare = with_labels(vec![]);
+        assert!(!bare.note.contains("`Labels:`"), "{}", bare.note);
     }
 
     #[test]
