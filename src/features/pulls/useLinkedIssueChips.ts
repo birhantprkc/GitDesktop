@@ -605,6 +605,14 @@ export function useJiraMentionChips(opts: {
   const issueList = useJiraIssues(repoPath, active ? link : null, "open");
 
   const [chips, setChips] = useState<JiraMentionChip[]>([]);
+  // Each async write carries the reset generation it was fired in and is dropped
+  // if a reset lands first. The ref is the source of truth, advanced
+  // synchronously in `resetWith` (the create dialog's open-seed effect runs
+  // before this hook's in one flush); `chipsGeneration` is the rendered mirror.
+  // A repo switch always closes and reseeds the dialog, and Jira has one link
+  // per repo, so this covers what per-target buckets cover on the forge path.
+  const generationRef = useRef(0);
+  const [chipsGeneration, setChipsGeneration] = useState(0);
   // A key the user removed (or that came in dismissed): upserts (seed/AI) skip it;
   // a MANUAL pick clears it (explicit intent overrides). Reset in resetWith.
   const dismissedRef = useRef<Set<string>>(new Set());
@@ -615,10 +623,35 @@ export function useJiraMentionChips(opts: {
   // resolves an AI-proposed key's summary/status from here.
   const lastCandidatesRef = useRef<Map<string, JiraCandidate>>(new Map());
 
+  // Resolve a chip's summary/status once; a failed probe leaves the chip as it is.
+  function probeSummary(gen: number, siteHost: string, key: string) {
+    probedRef.current.add(key);
+    jiraIssueView(siteHost, key)
+      .then((issue) => {
+        if (generationRef.current !== gen) return;
+        setChips((prev) =>
+          prev.map((c) =>
+            c.key === key && c.summary === ""
+              ? {
+                  ...c,
+                  summary: issue.summary,
+                  statusCategory: issue.statusCategory,
+                }
+              : c,
+          ),
+        );
+      })
+      .catch(() => undefined);
+  }
+
   // Reset and seed from body-parsed keys. An unresolvable key KEEPS its chip with
   // summary "" (author content is never silently dropped; contrast extraction seeds,
   // which drop when unverified); summary/status resolve lazily.
   const resetWith = useEffectEvent((keys: string[]) => {
+    // Advance first: every write below, and every probe fired from here, carries
+    // the new generation.
+    generationRef.current += 1;
+    const gen = generationRef.current;
     dismissedRef.current = new Set();
     probedRef.current = new Set();
     lastCandidatesRef.current = new Map();
@@ -636,26 +669,10 @@ export function useJiraMentionChips(opts: {
       });
       // Not on the open page yet — probe once to resolve summary/status, but keep
       // the chip regardless of the probe outcome (author content is preserved).
-      if (!hit && active && link) {
-        probedRef.current.add(key);
-        jiraIssueView(link.siteHost, key)
-          .then((issue) => {
-            setChips((prev) =>
-              prev.map((c) =>
-                c.key === key && c.summary === ""
-                  ? {
-                      ...c,
-                      summary: issue.summary,
-                      statusCategory: issue.statusCategory,
-                    }
-                  : c,
-              ),
-            );
-          })
-          .catch(() => undefined);
-      }
+      if (!hit && active && link) probeSummary(gen, link.siteHost, key);
     }
     setChips(seeded);
+    setChipsGeneration(gen);
   });
 
   // Backfill a chip's summary/status once the open page arrives. Only touches chips
@@ -663,44 +680,42 @@ export function useJiraMentionChips(opts: {
   // NOT on the open page is probed once here — `resetWith`'s own probe is skipped
   // when `active` still reflects the pre-open render. A failed probe leaves the chip
   // intact (summary "").
+  const backfillSummaries = useEffectEvent(
+    (
+      siteHost: string,
+      openIssues: NonNullable<typeof issueList.data>,
+      current: JiraMentionChip[],
+    ) => {
+      const gen = generationRef.current;
+      // Rendered chips from before a reset in this same flush would mark their
+      // keys probed for the new cycle; the reset's own render re-runs this.
+      if (chipsGeneration !== gen) return;
+      setChips((prev) => {
+        let changed = false;
+        const next = prev.map((c) => {
+          if (c.summary !== "") return c;
+          const hit = openIssues.find((i) => i.key === c.key);
+          if (!hit) return c;
+          changed = true;
+          return {
+            ...c,
+            summary: hit.summary,
+            statusCategory: hit.statusCategory,
+          };
+        });
+        return changed ? next : prev;
+      });
+      // Probe any still-unresolved chip not on the open page, once per key.
+      for (const c of current) {
+        if (c.summary !== "" || probedRef.current.has(c.key)) continue;
+        if (openIssues.some((i) => i.key === c.key)) continue;
+        probeSummary(gen, siteHost, c.key);
+      }
+    },
+  );
   useEffect(() => {
     if (!active || !issueList.data || !link) return;
-    setChips((prev) => {
-      let changed = false;
-      const next = prev.map((c) => {
-        if (c.summary !== "") return c;
-        const hit = issueList.data?.find((i) => i.key === c.key);
-        if (!hit) return c;
-        changed = true;
-        return {
-          ...c,
-          summary: hit.summary,
-          statusCategory: hit.statusCategory,
-        };
-      });
-      return changed ? next : prev;
-    });
-    // Probe any still-unresolved chip not on the open page, once per key.
-    for (const c of chips) {
-      if (c.summary !== "" || probedRef.current.has(c.key)) continue;
-      if (issueList.data.some((i) => i.key === c.key)) continue;
-      probedRef.current.add(c.key);
-      jiraIssueView(link.siteHost, c.key)
-        .then((issue) => {
-          setChips((prev) =>
-            prev.map((cc) =>
-              cc.key === c.key && cc.summary === ""
-                ? {
-                    ...cc,
-                    summary: issue.summary,
-                    statusCategory: issue.statusCategory,
-                  }
-                : cc,
-            ),
-          );
-        })
-        .catch(() => undefined);
-    }
+    backfillSummaries(link.siteHost, issueList.data, chips);
   }, [active, issueList.data, link, chips]);
 
   function remove(key: string) {
@@ -737,7 +752,13 @@ export function useJiraMentionChips(opts: {
   // skipped; once per key per reset.
   const seedExtractedKeys = useEffectEvent(
     (keys: string[], openIssues: typeof issueList.data) => {
-      const existing = new Set(chips.map((c) => c.key));
+      // Read at call time, never bumped here: a reset queued in this same flush
+      // hasn't rendered yet, so the rendered chips count as present only when
+      // they belong to the current generation (the updaters below dedupe again).
+      const gen = generationRef.current;
+      const existing = new Set(
+        chipsGeneration === gen ? chips.map((c) => c.key) : [],
+      );
       for (const key of keys) {
         if (existing.has(key) || dismissedRef.current.has(key)) continue;
         const hit = openIssues?.find((i) => i.key === key);
@@ -765,6 +786,7 @@ export function useJiraMentionChips(opts: {
         probedRef.current.add(key);
         jiraIssueView(link.siteHost, key)
           .then((issue) => {
+            if (generationRef.current !== gen) return;
             if (dismissedRef.current.has(key)) return;
             setChips((prev) =>
               prev.some((c) => c.key === key)
@@ -837,7 +859,8 @@ export function useJiraMentionChips(opts: {
 
   // Union the model's proposed mention keys into the chip cluster, marked `ai`.
   // Skip dismissed keys; skip existing chips. Resolve a new chip's summary/status
-  // from the last-built candidates (looked up case-insensitively).
+  // from the last-built candidates (looked up case-insensitively). Needs no
+  // generation stamp: a reset empties the candidate set its keys resolve against.
   function upsertFromDraft(draft: { jiraMentions: string[] }) {
     const fed = lastCandidatesRef.current;
     setChips((prev) => {
