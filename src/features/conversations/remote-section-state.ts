@@ -60,7 +60,9 @@ export type RemoteSectionState =
  *  when there is nothing to draw: react-query keeps the last good data beside
  *  `isError`, and blanking those rows would make a transient outage read as
  *  data loss. `paused` is react-query's offline park (`isPaused`): an
- *  online-mode read waits there with no timeout, so it needs its own words. */
+ *  online-mode read waits there with no timeout, so it needs its own words,
+ *  and it outranks an earlier failure the way {@link resolveDetailPane} does,
+ *  since a Retry would only park again. */
 export function resolveRemoteSection(input: {
   ghPending: boolean;
   ghReady: boolean;
@@ -74,11 +76,82 @@ export function resolveRemoteSection(input: {
   if (ghPending) return "gh-skeleton";
   if (!ghReady) return "not-ready";
   if (listPending) return paused ? "offline" : "list-skeleton";
-  if (error) return rowCount > 0 ? "rows-degraded" : "error";
-  // A parked refetch over a loaded list: zero drawn rows is still a loaded
-  // answer, so it keeps the empty copy.
   if (paused && rowCount > 0) return "rows-offline";
+  // A parked retry after a failure has nothing loaded to call empty. A parked
+  // refetch over a loaded list without one keeps the empty copy below: zero
+  // drawn rows is still a loaded answer.
+  if (paused && error) return "offline";
+  if (error) return rowCount > 0 ? "rows-degraded" : "error";
   return rowCount === 0 ? "empty" : "rows";
+}
+
+const PERMANENT_LIST_ERROR_KINDS: ReadonlySet<string> = new Set([
+  "issuesDisabled",
+  "invalidArgument",
+]);
+
+/** Whether a list read's error is a verdict neither a retry nor a reconnect can
+ *  change for the same key: a feature the repo has turned off, or a filter the
+ *  forge refuses. A list's error slot withholds its Retry for one, and the
+ *  ladder is fed {@link parkedUnlessPermanent} so its explanation stays on
+ *  screen instead of the "will load once you're back online" line. Structural,
+ *  since this file stays import-free. */
+export function isPermanentListError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "kind" in error &&
+    typeof error.kind === "string" &&
+    PERMANENT_LIST_ERROR_KINDS.has(error.kind)
+  );
+}
+
+/** The `paused` a list section passes {@link resolveRemoteSection}: the read's
+ *  park, except while {@link isPermanentListError} holds, which a park can't
+ *  clear. */
+export function parkedUnlessPermanent(q: {
+  isPaused: boolean;
+  error: unknown;
+}): boolean {
+  return q.isPaused && !isPermanentListError(q.error);
+}
+
+/** The one line the review-comments block shows, or null. `threadCount` is
+ *  the threads it draws, `undefined` until the read has loaded. A failure
+ *  offers Retry; a park never does, and it outranks the failure it follows.
+ *  A loaded empty answer stays quiet offline, like a list's empty rung. */
+export function reviewCommentsNotice(input: {
+  threadCount: number | undefined;
+  isError: boolean;
+  isPaused: boolean;
+}): { message: string; retry: boolean } | null {
+  const { threadCount, isPaused } = input;
+  const failed = refreshFailed(input);
+  const drawn = threadCount !== undefined && threadCount > 0;
+  switch (true) {
+    case failed && drawn:
+      return {
+        message:
+          "Couldn't refresh review comments — showing the last loaded ones.",
+        retry: true,
+      };
+    case failed && threadCount !== undefined:
+      return { message: "Couldn't refresh review comments.", retry: true };
+    case failed:
+      return { message: "Couldn't load review comments.", retry: true };
+    case isPaused && drawn:
+      return {
+        message: "You're offline — showing the last loaded review comments.",
+        retry: false,
+      };
+    case isPaused && threadCount === undefined:
+      return {
+        message: offlinePendingMessage("review comments"),
+        retry: false,
+      };
+    default:
+      return null;
+  }
 }
 
 export type ListNoticeCause = "refresh" | "load-more" | "offline";
@@ -185,6 +258,24 @@ export function guardedLimit(
   return rollback !== null && rollback.from === requested
     ? rollback.to
     : requested;
+}
+
+/** A limit-keyed list read as the guard observes it: `loaded` is success on
+ *  real (non-placeholder) data, `failed` an error with no fetch in flight. A
+ *  read parked offline is not settled either way: a retry refetches the errored
+ *  key, which stays `isError` until that fetch starts, and a park would record
+ *  a failure whose Retry could only park again. */
+export function guardObservation(q: {
+  isSuccess: boolean;
+  isError: boolean;
+  isPlaceholderData: boolean;
+  isFetching: boolean;
+  isPaused: boolean;
+}): { loaded: boolean; failed: boolean } {
+  return {
+    loaded: q.isSuccess && !q.isPlaceholderData,
+    failed: q.isError && !q.isFetching && !q.isPaused,
+  };
 }
 
 /** One observation of the limit-keyed list query, run at `limit` (the guarded

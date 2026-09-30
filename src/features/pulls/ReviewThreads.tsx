@@ -16,6 +16,8 @@ import { PathText } from "@/components/path-text";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { DegradedListNotice } from "@/features/conversations/ConversationListPanel";
+import { reviewCommentsNotice } from "@/features/conversations/remote-section-state";
 import { Thread } from "@/features/conversations/Thread";
 import type { MentionSource } from "@/features/conversations/useMentionCandidates";
 import type {
@@ -1074,14 +1076,19 @@ export function ReviewThreadList({
 /**
  * The residual "Review comments" block for the Conversation tab: the threads NOT
  * shown inline under a review — all threads on GitLab/Bitbucket (which don't model
- * reviews), plus standalone line comments on GitHub. Renders nothing when there are
- * none or while loading (the data arrives after the PR body, so a spinner would
- * only cause layout shift); a quiet muted line on error. `heading` lets the caller
- * retitle it when reviews DID claim threads above.
+ * reviews), plus standalone line comments on GitHub. A healthy read with no threads,
+ * or one still loading, shows nothing visible (the data arrives after the PR body,
+ * so a spinner would only cause layout shift). A failed read, or a parked one with
+ * threads to keep or none loaded yet, shows a notice between the heading and the
+ * list; a parked read that already loaded an empty answer stays quiet. Threads
+ * already loaded are never replaced; {@link reviewCommentsNotice} picks the line.
+ * `heading` lets the caller retitle the block when reviews DID claim threads above.
  */
 export function ReviewThreadsBlock({
   threads,
   isError,
+  isPaused = false,
+  onRetry,
   heading = "Review comments",
   onQuote,
   onReply,
@@ -1096,8 +1103,14 @@ export function ReviewThreadsBlock({
   revealThreadId,
   onRevealed,
 }: {
+  /** `undefined` while the read hasn't loaded; `[]` is a loaded answer. */
   threads: ReviewThreadOut[] | undefined;
   isError: boolean;
+  /** The threads read is parked waiting for a connection (react-query's
+   *  `isPaused`); it outranks `isError`, and its notice offers no Retry. */
+  isPaused?: boolean;
+  /** Re-runs the threads read from a failed-refresh notice. Absent = no Retry. */
+  onRetry?: () => void;
   /** Section heading — "Review comments" by default; callers pass e.g. "Other line
    *  comments" when some threads render inline under reviews above. */
   heading?: string;
@@ -1119,38 +1132,53 @@ export function ReviewThreadsBlock({
   /** Cleared once the inner list reveals the thread. */
   onRevealed?: () => void;
 } & ThreadCallbacks) {
-  if (isError) {
-    return (
-      <p className="text-xs text-muted-foreground">
-        Couldn't load review comments.
-      </p>
-    );
-  }
-  // Nothing while loading (undefined) or when there are no threads — no noise.
-  if (!threads || threads.length === 0) return null;
+  const drawn = threads !== undefined && threads.length > 0;
+  const notice = reviewCommentsNotice({
+    threadCount: threads?.length,
+    isError,
+    isPaused,
+  });
+  // Nothing visible while loading (undefined) or when there are no threads.
+  const idle = !drawn && notice === null;
 
+  // Always mounted, so a notice's text arrives in a live region already in the
+  // DOM; every slot keeps its position, so the list (and any editor focused in
+  // it) never remounts as the read's state moves. Idle, the box holds only the
+  // sr-only region: as the last child, `-mt-4` collapses away the gap the
+  // caller's space-y-4 would otherwise open below the feed.
   return (
-    <div className="space-y-3">
+    <div className={cn("space-y-3", idle && "last:-mt-4")}>
       {/* Total residual count — a "(0)" beside a visible resolved thread reads
           broken; the per-file "✓ n resolved" expander conveys resolved state. */}
-      <h3 className="text-xs font-medium text-muted-foreground">
-        {heading} ({threads.length})
-      </h3>
-      <ReviewThreadList
-        threads={threads}
-        onQuote={onQuote}
-        onReply={onReply}
-        onResolve={onResolve}
-        onEditComment={onEditComment}
-        onDeleteComment={onDeleteComment}
-        editHeld={editHeld}
-        provider={provider}
-        apply={apply}
-        fileDiffLookup={fileDiffLookup}
-        mentions={mentions}
-        revealThreadId={revealThreadId}
-        onRevealed={onRevealed}
+      {drawn && (
+        <h3 className="text-xs font-medium text-muted-foreground">
+          {heading} ({threads.length})
+        </h3>
+      )}
+      <DegradedListNotice
+        noun="review comments"
+        degraded={notice !== null}
+        message={notice?.message}
+        onRetry={notice?.retry ? onRetry : undefined}
+        className="px-0 pb-0"
       />
+      {drawn && (
+        <ReviewThreadList
+          threads={threads}
+          onQuote={onQuote}
+          onReply={onReply}
+          onResolve={onResolve}
+          onEditComment={onEditComment}
+          onDeleteComment={onDeleteComment}
+          editHeld={editHeld}
+          provider={provider}
+          apply={apply}
+          fileDiffLookup={fileDiffLookup}
+          mentions={mentions}
+          revealThreadId={revealThreadId}
+          onRevealed={onRevealed}
+        />
+      )}
     </div>
   );
 }
