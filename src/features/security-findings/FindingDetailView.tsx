@@ -8,6 +8,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DegradedListNotice } from "@/features/conversations/ConversationListPanel";
+import {
+  detailNoticeMessage,
+  offlinePendingMessage,
+  resolveDetailPane,
+} from "@/features/conversations/remote-section-state";
 import type {
   BbAnnotationOut,
   BbReportOut,
@@ -795,7 +801,14 @@ export function FindingDetailView({
   // to what's read here, since the six categories carry different data shapes.
   const queryByType: Record<
     SelectedFinding["type"],
-    { isPending: boolean; isError: boolean }
+    {
+      isPending: boolean;
+      isError: boolean;
+      isPaused: boolean;
+      isFetching: boolean;
+      data: unknown;
+      refetch: () => unknown;
+    }
   > = {
     alert: alerts,
     codeScanning,
@@ -806,9 +819,81 @@ export function FindingDetailView({
   };
   const query = selectedFinding ? queryByType[selectedFinding.type] : alerts;
 
-  // Gated on `enabled`: a disabled query stays `isPending` forever, so an
-  // ungated skeleton would spin here if the repo lost the capability mid-session.
-  if (enabled && query.isPending) {
+  /** The selected finding's detail from the loaded data, or null when it isn't
+   *  in the list. */
+  function findingDetail(): ReactNode {
+    if (selectedFinding?.type === "alert") {
+      const alert = alerts.data?.alerts.find(
+        (a) => a.number === selectedFinding.number,
+      );
+      if (alert) return <AlertDetail alert={alert} />;
+    } else if (selectedFinding?.type === "codeScanning") {
+      const alert = codeScanning.data?.alerts.find(
+        (a) => a.number === selectedFinding.number,
+      );
+      if (alert) return <CodeScanningDetail alert={alert} />;
+    } else if (selectedFinding?.type === "secretScanning") {
+      const alert = secrets.data?.alerts.find(
+        (a) => a.number === selectedFinding.number,
+      );
+      if (alert) return <SecretScanningDetail alert={alert} />;
+    } else if (selectedFinding?.type === "advisory") {
+      const advisory = advisories.data?.advisories.find(
+        (a) => a.ghsaId === selectedFinding.ghsaId,
+      );
+      if (advisory) return <AdvisoryDetail advisory={advisory} />;
+    } else if (selectedFinding?.type === "glFinding" && gl.data) {
+      const data = gl.data;
+      if (selectedFinding.category === "codeQuality") {
+        const finding = data.codeQuality.findings.find(
+          (f) => codeQualityFindingId(f) === selectedFinding.id,
+        );
+        if (finding) return <GlQualityDetail finding={finding} data={data} />;
+      } else {
+        const category =
+          selectedFinding.category === "sast"
+            ? data.sast
+            : data.secretDetection;
+        const finding = category.findings.find(
+          (f) => secureFindingId(f) === selectedFinding.id,
+        );
+        if (finding)
+          return (
+            <GlSecureDetail
+              finding={finding}
+              data={data}
+              fallbackTitle={
+                selectedFinding.category === "sast"
+                  ? "Unidentified rule"
+                  : "Unknown secret type"
+              }
+            />
+          );
+      }
+    } else if (selectedFinding?.type === "bbFinding" && bb.data) {
+      const report = bb.data.reports.find(
+        (r) => r.uuid === selectedFinding.reportUuid,
+      );
+      const annotation = report?.annotations.find(
+        (a) => a.uuid === selectedFinding.annotationUuid,
+      );
+      if (report && annotation)
+        return <BbAnnotationDetail report={report} annotation={annotation} />;
+    }
+    return null;
+  }
+
+  // Loaded data always renders: a refresh that fails or waits offline keeps
+  // the finding under a notice. Pending is gated on `enabled`: a disabled query
+  // stays `isPending` forever, so an ungated skeleton would spin here if the
+  // repo lost the capability mid-session.
+  const pane = resolveDetailPane({
+    pending: enabled && query.isPending,
+    error: query.isError,
+    hasData: query.data !== undefined,
+    paused: query.isPaused,
+  });
+  if (pane === "skeleton") {
     return (
       <div className="space-y-3 p-4">
         <Skeleton className="h-7 w-2/3" />
@@ -817,70 +902,53 @@ export function FindingDetailView({
       </div>
     );
   }
-
-  if (query.isError) {
+  if (pane === "offline") {
     return (
       <div className="p-6 text-center text-sm text-muted-foreground">
-        Couldn't load this finding.
+        {offlinePendingMessage("this finding")}
+      </div>
+    );
+  }
+  if (pane === "error" && query.isError) {
+    return (
+      <div className="flex flex-col items-center gap-3 p-6 text-center text-sm text-muted-foreground">
+        <p>Couldn't load this finding.</p>
+        <Button
+          variant="outline"
+          size="sm"
+          className="cursor-pointer"
+          disabled={query.isFetching}
+          onClick={() => query.refetch()}
+        >
+          {query.isFetching ? "Retrying…" : "Retry"}
+        </Button>
       </div>
     );
   }
 
-  if (selectedFinding?.type === "alert") {
-    const alert = alerts.data?.alerts.find(
-      (a) => a.number === selectedFinding.number,
+  const detail = findingDetail();
+  if (detail) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <DegradedListNotice
+          noun="this finding"
+          degraded={pane === "content-degraded"}
+          // The finding is read from its category's list, whose key doesn't
+          // change with the selection, so no previous finding is ever shown
+          // as placeholder.
+          message={detailNoticeMessage({
+            noun: "finding",
+            isError: query.isError,
+            stale: false,
+          })}
+          // Only a failed refresh gets a Retry: offline, it would park again at
+          // once, and reconnecting resumes the read by itself.
+          onRetry={query.isError ? () => query.refetch() : undefined}
+          className="shrink-0 border-b px-4 py-1.5"
+        />
+        <div className="min-h-0 flex-1">{detail}</div>
+      </div>
     );
-    if (alert) return <AlertDetail alert={alert} />;
-  } else if (selectedFinding?.type === "codeScanning") {
-    const alert = codeScanning.data?.alerts.find(
-      (a) => a.number === selectedFinding.number,
-    );
-    if (alert) return <CodeScanningDetail alert={alert} />;
-  } else if (selectedFinding?.type === "secretScanning") {
-    const alert = secrets.data?.alerts.find(
-      (a) => a.number === selectedFinding.number,
-    );
-    if (alert) return <SecretScanningDetail alert={alert} />;
-  } else if (selectedFinding?.type === "advisory") {
-    const advisory = advisories.data?.advisories.find(
-      (a) => a.ghsaId === selectedFinding.ghsaId,
-    );
-    if (advisory) return <AdvisoryDetail advisory={advisory} />;
-  } else if (selectedFinding?.type === "glFinding" && gl.data) {
-    const data = gl.data;
-    if (selectedFinding.category === "codeQuality") {
-      const finding = data.codeQuality.findings.find(
-        (f) => codeQualityFindingId(f) === selectedFinding.id,
-      );
-      if (finding) return <GlQualityDetail finding={finding} data={data} />;
-    } else {
-      const category =
-        selectedFinding.category === "sast" ? data.sast : data.secretDetection;
-      const finding = category.findings.find(
-        (f) => secureFindingId(f) === selectedFinding.id,
-      );
-      if (finding)
-        return (
-          <GlSecureDetail
-            finding={finding}
-            data={data}
-            fallbackTitle={
-              selectedFinding.category === "sast"
-                ? "Unidentified rule"
-                : "Unknown secret type"
-            }
-          />
-        );
-    }
-  } else if (selectedFinding?.type === "bbFinding" && bb.data) {
-    const report = bb.data.reports.find(
-      (r) => r.uuid === selectedFinding.reportUuid,
-    );
-    const annotation = report?.annotations.find(
-      (a) => a.uuid === selectedFinding.annotationUuid,
-    );
-    if (report && annotation)
-      return <BbAnnotationDetail report={report} annotation={annotation} />;
   }
 
   return (

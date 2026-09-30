@@ -6,9 +6,11 @@
 //! reads those. Each category rides an availability envelope: scanning never
 //! configured, an expired artifact, a report the API won't serve, and an
 //! unrecognized failure are all distinct from "genuinely clean" — an empty list
-//! only renders as clean when a parsed report says so. Only a missing `glab`
-//! binary or a timeout escapes as `Err`; every completed-but-failed call is
-//! classified into the envelope instead.
+//! only renders as clean when a parsed report says so. A missing `glab` binary,
+//! a timeout, and a project, pipeline, job or bridges read that never
+//! reached GitLab's verdict (the network or the server gave out) escape as
+//! `Err`, so the UI keeps the findings it already holds; every other
+//! completed-but-failed call is classified into the envelope.
 
 use std::collections::HashSet;
 
@@ -16,10 +18,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::forge::encode_query_value;
 use crate::forge::gitlab::{encode_project, glab_output_is_404, project_path};
 use crate::forge::glab::{run_glab_raw, GlabOutput, GLAB_NETWORK_TIMEOUT};
+use crate::forge::session::{gh_error_is_network, gh_error_is_rate_limit};
 
 /// A report bigger than this is refused rather than parsed. `run_glab_raw` has
 /// already buffered the whole artifact by the time we look, so the cap bounds the
@@ -447,6 +450,28 @@ fn classify_call_failure(stdout: &str, stderr: &str) -> (GlFindingAvailability, 
     }
 }
 
+/// `classify_call_failure`, except that a failure it can only call
+/// `Indeterminate` whose stderr names a transport or server outage rejects: an
+/// `Ok` envelope would replace findings the UI already holds. A 403 and a rate
+/// limit keep their envelopes. glab's transport wording shares gh's vocabulary.
+fn classify_or_reject(
+    stdout: &str,
+    stderr: &str,
+) -> AppResult<(GlFindingAvailability, Option<String>)> {
+    let (availability, detail) = classify_call_failure(stdout, stderr);
+    let rate_limited = gh_error_is_rate_limit(Some(stderr))
+        || stderr.to_ascii_lowercase().contains("too many requests");
+    if availability == GlFindingAvailability::Indeterminate
+        && !rate_limited
+        && gh_error_is_network(Some(stderr))
+    {
+        return Err(AppError::Glab(detail.unwrap_or_else(|| {
+            "Couldn't reach GitLab to load the security findings.".to_string()
+        })));
+    }
+    Ok((availability, detail))
+}
+
 /// Whether a job's artifacts are past their expiry. An absent or unparseable
 /// timestamp reads as "not expired" — guessing expiry would mislabel a report
 /// GitLab is simply refusing to serve.
@@ -869,7 +894,7 @@ async fn fetch_json<T: serde::de::DeserializeOwned>(
     let out = run_glab_raw(Some(repo_path), &["api", endpoint], GLAB_NETWORK_TIMEOUT).await?;
     let stdout = out.stdout_lossy();
     if out.code != 0 {
-        let (availability, detail) = classify_call_failure(&stdout, &out.stderr);
+        let (availability, detail) = classify_or_reject(&stdout, &out.stderr)?;
         return Ok(Listed::Unavailable(availability, detail));
     }
     match serde_json::from_str::<Vec<T>>(stdout.trim()) {
@@ -989,6 +1014,35 @@ fn downstream_pipeline_ids(bridges: &[RawBridge], project_id: Option<u64>) -> Ve
         .collect()
 }
 
+/// The jobs of a pipeline's same-project children. A classified envelope (a
+/// refused or unreadable bridges or jobs read) is skipped, so it can't turn an
+/// otherwise-good read into an error. A transport failure propagates: dropping
+/// the child's jobs would read as "no scanning reports" and replace findings the
+/// UI already holds.
+async fn walk_child_jobs<B, BF, J, JF>(
+    fetch_bridges: B,
+    mut fetch_child_jobs: J,
+    project_id: Option<u64>,
+) -> AppResult<Vec<RawJob>>
+where
+    B: FnOnce() -> BF,
+    BF: std::future::Future<Output = AppResult<Listed<RawBridge>>>,
+    J: FnMut(u64) -> JF,
+    JF: std::future::Future<Output = AppResult<Listed<RawJob>>>,
+{
+    let bridges = match fetch_bridges().await? {
+        Listed::Items(bridges) => bridges,
+        Listed::Unavailable(..) => return Ok(Vec::new()),
+    };
+    let mut jobs = Vec::new();
+    for child_id in downstream_pipeline_ids(&bridges, project_id) {
+        if let Listed::Items(child_jobs) = fetch_child_jobs(child_id).await? {
+            jobs.extend(child_jobs);
+        }
+    }
+    Ok(jobs)
+}
+
 /// Whether a child-pipeline walk could still add anything: true when the parent's
 /// own jobs leave any category unanswered, which is the only case a child's jobs
 /// could change.
@@ -1066,7 +1120,7 @@ pub async fn pipeline_findings(repo_path: &str, limit: Option<u32>) -> AppResult
     .await?;
     let stdout = out.stdout_lossy();
     if out.code != 0 {
-        let (availability, detail) = classify_call_failure(&stdout, &out.stderr);
+        let (availability, detail) = classify_or_reject(&stdout, &out.stderr)?;
         return Ok(uniform_out(
             GlPipelineState::Unavailable,
             None,
@@ -1168,16 +1222,15 @@ pub async fn pipeline_findings(repo_path: &str, limit: Option<u32>) -> AppResult
     // A monorepo that scans in a child pipeline publishes its reports on the
     // CHILD's jobs, which the parent's jobs endpoint never lists. Gated on a
     // category the parent left unanswered, since that is the only case a child
-    // could change. Failures here are swallowed on purpose: a bridges hiccup must
-    // not turn an otherwise-good read into an error.
+    // could change.
     if needs_child_jobs(&jobs) {
-        if let Ok(Listed::Items(bridges)) = fetch_bridges(repo_path, &enc, pipeline_id).await {
-            for child_id in downstream_pipeline_ids(&bridges, project_id) {
-                if let Ok(Listed::Items(child_jobs)) = fetch_jobs(repo_path, &enc, child_id).await {
-                    jobs.extend(child_jobs);
-                }
-            }
-        }
+        let child_jobs = walk_child_jobs(
+            || fetch_bridges(repo_path, &enc, pipeline_id),
+            |child_id| fetch_jobs(repo_path, &enc, child_id),
+            project_id,
+        )
+        .await?;
+        jobs.extend(child_jobs);
     }
 
     let now = Utc::now();
@@ -1777,6 +1830,120 @@ mod tests {
             code_quality_envelope(bodies(&[report]), 100).findings.len(),
             2
         );
+    }
+
+    #[test]
+    fn a_read_that_never_reached_gitlab_rejects_instead_of_emptying_the_findings() {
+        for stderr in [
+            "Get \"https://gitlab.com/api/v4/projects/g%2Fp\": dial tcp: lookup gitlab.com: no such host",
+            "glab: context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+            "glab: HTTP 502 Bad Gateway",
+        ] {
+            let err = classify_or_reject("", stderr).expect_err(stderr);
+            assert!(matches!(err, AppError::Glab(ref m) if m == stderr), "{err:?}");
+        }
+        // Negative controls: a refusal, a rate limit and an unrecognized failure
+        // keep their envelopes, even where the stderr carries a transport word.
+        assert_eq!(
+            classify_or_reject("", "glab: HTTP 403 Forbidden (connection kept)")
+                .unwrap()
+                .0,
+            GlFindingAvailability::Forbidden
+        );
+        assert_eq!(
+            classify_or_reject("", "glab: 429 Too Many Requests, connection throttled")
+                .unwrap()
+                .0,
+            GlFindingAvailability::Indeterminate
+        );
+        assert_eq!(
+            classify_or_reject(r#"{"message":"404 Project Not Found"}"#, "glab: HTTP 404")
+                .unwrap()
+                .0,
+            GlFindingAvailability::Indeterminate
+        );
+    }
+
+    fn bridge_to(id: u64, project_id: u64) -> RawBridge {
+        serde_json::from_value(json!({"downstream_pipeline": {"id": id, "project_id": project_id}}))
+            .unwrap()
+    }
+
+    fn job(id: u64) -> RawJob {
+        RawJob {
+            id: Some(id),
+            ..RawJob::default()
+        }
+    }
+
+    fn offline() -> AppError {
+        AppError::Glab("dial tcp: lookup gitlab.com: no such host".to_string())
+    }
+
+    #[tokio::test]
+    async fn a_child_walk_that_loses_the_network_fails_the_whole_read() {
+        // A child's jobs read failing on the transport rejects, never an empty
+        // child that would read as "no scanning reports".
+        let result = walk_child_jobs(
+            || std::future::ready(Ok(Listed::Items(vec![bridge_to(10, 7), bridge_to(11, 7)]))),
+            |child_id| {
+                std::future::ready(if child_id == 10 {
+                    Ok(Listed::Items(vec![job(100)]))
+                } else {
+                    Err(offline())
+                })
+            },
+            Some(7),
+        )
+        .await;
+        assert!(matches!(result, Err(AppError::Glab(_))), "{result:?}");
+        // The bridges read losing the network rejects the same way.
+        let result = walk_child_jobs(
+            || std::future::ready(Err::<Listed<RawBridge>, _>(offline())),
+            |_| std::future::ready(Ok(Listed::Items(Vec::new()))),
+            Some(7),
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_child_walk_envelope_is_skipped_and_keeps_the_rest() {
+        // Negative control: a refused child jobs read is a classified envelope,
+        // skipped; the other child's jobs still land.
+        let jobs = walk_child_jobs(
+            || std::future::ready(Ok(Listed::Items(vec![bridge_to(10, 7), bridge_to(11, 7)]))),
+            |child_id| {
+                std::future::ready(Ok(if child_id == 10 {
+                    Listed::Items(vec![job(100)])
+                } else {
+                    Listed::Unavailable(GlFindingAvailability::Forbidden, None)
+                }))
+            },
+            Some(7),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            jobs.iter().map(|j| j.id).collect::<Vec<_>>(),
+            vec![Some(100)]
+        );
+        // A refused bridges read skips the walk; the parent's read stays intact.
+        let jobs = walk_child_jobs(
+            || {
+                std::future::ready(Ok(Listed::<RawBridge>::Unavailable(
+                    GlFindingAvailability::Indeterminate,
+                    Some("could not read GitLab's pipeline bridges".to_string()),
+                )))
+            },
+            |_| -> std::future::Ready<AppResult<Listed<RawJob>>> {
+                panic!("no child is walked without bridges")
+            },
+            Some(7),
+        )
+        .await
+        .unwrap();
+        assert!(jobs.is_empty());
     }
 
     #[test]
