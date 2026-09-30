@@ -98,7 +98,9 @@ export function buildConflictPrompt(input: ConflictPromptInput): {
  * so prose before/after is dropped and a file's own inner code fences (e.g. a
  * markdown document) are preserved. Falls back to the whole text, minus a stray
  * leading fence, when there's no usable pair — e.g. a response that wasn't fenced
- * or one still mid-stream.
+ * or one still mid-stream. Either way the result never ends in the file's last
+ * line break: a closing fence takes exactly one break with it, and otherwise the
+ * trim leaves none (`withReferenceTrailingNewline` depends on this).
  */
 export function extractResolvedContent(raw: string): string {
   const text = raw.trim();
@@ -107,8 +109,28 @@ export function extractResolvedContent(raw: string): string {
     const afterOpen = text.indexOf("\n", open);
     const close = text.lastIndexOf("```");
     if (afterOpen !== -1 && close > afterOpen) {
-      return text.slice(afterOpen + 1, close).replace(/\n$/, "");
+      // `\r?`: a CRLF response must not leave a dangling `\r` on the last line.
+      return text.slice(afterOpen + 1, close).replace(/\r?\n$/, "");
     }
   }
-  return text.replace(/^```[^\n]*\n?/, "").replace(/\n?```$/, "");
+  return text.replace(/^```[^\n]*\n?/, "").replace(/(?:\r?\n)?```$/, "");
+}
+
+/**
+ * Gives an extracted proposal back the final newline extraction removed, when
+ * `reference` (the side it is reviewed against) ends in one; the accept writes
+ * content as-is. Relies on {@link extractResolvedContent}'s contract: its output
+ * never keeps the file's last line break, so a proposal ending in `\n` is a file
+ * ending in a blank line and still gets one appended. The appended break follows
+ * the proposal's own line endings, or the reference's when it has none.
+ */
+export function withReferenceTrailingNewline(
+  proposal: string,
+  reference: string,
+): string {
+  if (proposal === "" || !reference.endsWith("\n")) return proposal;
+  const crlf = proposal.includes("\n")
+    ? proposal.includes("\r\n")
+    : reference.endsWith("\r\n");
+  return proposal + (crlf ? "\r\n" : "\n");
 }

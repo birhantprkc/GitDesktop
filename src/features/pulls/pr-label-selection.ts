@@ -7,12 +7,25 @@ import type { RemoteLens } from "@/lib/git/types";
  *  was produced for. */
 export type LabelTargetSig = { repoPath: string; lens: RemoteLens };
 
+/** Label names stamped with the target they were validated against. */
+export type StampedLabels = { names: string[]; sig: LabelTargetSig } | null;
+
 /** The AI's current label proposal, stamped with the target it was validated
  *  against. */
-export type AiLabelProposal = { names: string[]; sig: LabelTargetSig } | null;
+export type AiLabelProposal = StampedLabels;
 
 export function sameLabelTarget(a: LabelTargetSig, b: LabelTargetSig): boolean {
   return a.repoPath === b.repoPath && a.lens === b.lens;
+}
+
+/** The names of a target-stamped list (a proposal, or a finished run's dropped
+ *  names) that apply under `current`: all of them on the stamp's own target,
+ *  none on any other. */
+export function namesForTarget(
+  stamped: StampedLabels,
+  current: LabelTargetSig,
+): string[] {
+  return stamped && sameLabelTarget(stamped.sig, current) ? stamped.names : [];
 }
 
 /** A proposal REPLACES the previous one: every stream chunk is a parse of the
@@ -57,9 +70,8 @@ export function deriveSelectedLabels(input: {
   current: LabelTargetSig;
 }): Set<string> {
   const { ai, added, removed, current } = input;
-  const proposed = ai && sameLabelTarget(ai.sig, current) ? ai.names : [];
   const selected = new Set<string>();
-  for (const name of [...proposed, ...added])
+  for (const name of [...namesForTarget(ai, current), ...added])
     if (!removed.has(name)) selected.add(name);
   return selected;
 }
