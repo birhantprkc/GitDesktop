@@ -12,6 +12,146 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-09-30
+
+### Changed
+
+- The example name in the new-branch, branch-from-commit, and new-worktree
+  fields follows your repository's naming convention: it uses the prefix most
+  of your branches share (or none, if they're unprefixed). The new-branch
+  dialog shows your branch naming rule's own example when it provides one.
+
+### Fixed
+
+- **Settings → About** tells you when the GitHub CLI or GitLab CLI can't reach
+  its server to check your sign-in, and a Re-check that fails keeps the tool list
+  already on screen.
+- Accepting an AI conflict resolution keeps the file's trailing newline, and a
+  proposal identical to your side says it matches.
+- Bitbucket findings keep their annotation details on screen through a refresh
+  that can't reach Bitbucket, and a findings check that loses its connection
+  finishes quickly.
+- Closed pull requests now have their own icon in an issue's **Development**
+  section and on the preview card for a `#N` or `!N` reference, matching
+  project boards, so you can tell them apart from open ones by shape as well
+  as color. Preview cards also draw open and draft pull requests with the same
+  icons the boards use.
+- **Repository settings → Access** marks a personal repository's owner as
+  **Owner** and explains why they can't be removed, and each collaborator's
+  remove button names that person for screen readers.
+- Accepting an AI conflict resolution stages the file only when it is free of
+  conflict markers. A proposal that still has some is written but left
+  unstaged, with the button reading **Accept**, so leftover markers can't ride
+  into the commit when you continue, and you can finish the file by hand.
+- File diffs stay on screen when a refresh fails or you're offline, in a pull
+  request's Files tab and its commits, with a short note above the diff and a
+  Retry when the refresh failed. A diff that hasn't loaded yet says it's
+  waiting for a connection.
+- Keyboard shortcuts, including Escape to close a screen, keep working while
+  focus is on a disabled button that explains why it's disabled.
+- Discarding a file that also has staged changes now confirms exactly what
+  happens: the file returns to its staged version, and the staged changes are
+  kept.
+- In the create pull request dialog, the note naming AI-suggested labels the
+  repository doesn't have always describes the repository you're creating the
+  pull request in, including after switching between your fork and its parent.
+- Bitbucket and GitLab security findings you already loaded stay on screen
+  when a refresh can't reach the server, with a note saying so. An interrupted
+  GitLab findings check ends after one timed-out report download, so the note
+  appears sooner.
+- The security finding you have open stays readable when **Load more** fails
+  in the Findings list, with a note and a Retry above it.
+- When GitLab or Bitbucket can't be reached (a dropped network, a VPN or proxy
+  problem, or a server outage), your sign-in stays as it was with no prompt to
+  reconnect, and GitDesktop tells you it couldn't reach the host.
+- Jira issue suggestions in the create pull request dialog always belong to the
+  repository you're working in.
+- Reopening a create pull request dialog suggests linked issues for the branch
+  you're opening it for, so a new pull request starts with only its own issue
+  references.
+- In the create pull request dialog, your fork and its parent each keep their
+  own linked-issue suggestions and picks, so switching shows that repository's
+  issues and switching back restores yours.
+- Unlinking an issue in the create and edit pull request dialogs keeps your
+  place: focus stays on the remaining linked issues, or lands on **Link issue**
+  when the last one is removed, so keyboard and screen reader users can carry
+  on without hunting for where they were. The issue picker is also announced
+  by name.
+- **Mark resolved** in the conflict editor asks before staging a file that still
+  has conflict markers, giving you the chance to clean them up first. Files
+  whose markers the editor can't split into regions offer **Mark resolved** too,
+  so you can finish them by hand and stage them from the same place.
+- When GitHub, GitLab, Bitbucket or Jira can't be reached, error messages say
+  so in one plain line and point you to your network connection, with the
+  full technical text still under **Details**.
+- A pull request says "No activity yet." only once its review comments and
+  timeline have loaded.
+- While you're offline, the pull request, issue, Jira, discussion and security
+  findings lists, and a pull request's review comments, keep what's already
+  loaded and say they're waiting for a connection, picking up again on their
+  own once you're back. Review comments that can't refresh stay on screen with
+  a Retry, and one Retry on the pull request list brings back its rows along
+  with their CI, merge and review status chips.
+- Opening a repository, staging, committing, stashing, branch operations, and
+  edits to local pull requests, local issues, and settings complete immediately
+  while you're offline, with no wait for a connection.
+- The moment your connection drops, lists and details whose last refresh
+  failed switch to saying you're offline and pick up again on their own once
+  you're back. The pull request list's review grouping and an item's projects
+  and project fields also say when they're waiting for a connection, the
+  security findings explanation cards say you're offline over their last
+  loaded results, and when a notice's Retry goes away, keyboard focus stays
+  beside it.
+- Pull request and issue details and security findings keep what's already
+  loaded when a refresh fails or you're offline, and a **Load more** that
+  fails keeps the rows you already had. A short note says what happened, with
+  a Retry when a refresh or **Load more** failed, and anything that hasn't
+  loaded yet tells you it's waiting for a connection.
+- Pull requests, issues, linked Jira issues and discussions you already loaded
+  stay on screen when a refresh can't reach the server, with a note saying so
+  and a Retry beside it. A discussion list that can't load says so and offers
+  a Retry, and project boards show one line with a single Retry when several
+  reads fail for the same reason.
+- When GitHub can't be reached (a VPN or proxy problem, a DNS failure, or a
+  GitHub outage), your sign-in stays as it was with no prompt to reconnect,
+  project boards you already loaded stay on screen, and GitDesktop quietly
+  checks again later.
+- Inviting a collaborator from **Repository settings → Access** on a personal
+  repository sends a **Write** invitation, the access GitHub grants collaborators
+  there. Organization repositories keep the full choice of roles.
+- The CI status icons on pull request and merge request rows stay in place when
+  a refresh can't reach GitHub, GitLab or Bitbucket, and update again once the
+  connection is back.
+- When you create a pull request in a repository that has labels, the AI draft
+  includes a label choice, with "none" as a clear answer of its own. If a model
+  reached through an API key leaves the choice out, a quick follow-up request
+  picks from your repository's labels. Issue links the draft proposes are picked
+  up even when the model formats them in bold or code, or ends them with a period.
+- AI label suggestions in the create pull request dialog always match the
+  repository the pull request is created in, including after switching between
+  your fork and its parent. A suggested label you remove stays removed, and the
+  pull request gets exactly the labels shown in the dialog.
+- The **Project fields** editor tells you when changes for a board you can no
+  longer edit weren't saved, so you know which of your edits landed.
+- While a worktree is being promoted to your main workspace, pulls, merges,
+  rebases, resets, reverts, cherry-picks, history edits, undo, and branch
+  renames and deletes ask you to try again once it finishes, so the promote
+  always lands on the branch you chose.
+- When your connection comes back, the sign-in status in Settings → About and
+  the parent repository's base branches in the create pull request dialog
+  refresh on their own.
+- **Reset to _origin/…_** keeps your untracked work safe: when files or folders
+  (other than ignored ones) sit where the upstream version has files, the reset
+  stops and names them so you can move them aside first.
+- Agent session branches now start without an upstream, so a kept session
+  stays safe from Git's merged-branch cleanup and is still there to resume.
+- A GitHub or GitLab session that needs attention in **Settings → Accounts**
+  explains why in the host's own words, so it's clear when reconnecting will
+  fix it.
+- A Bitbucket pull request's tasks and a commit's comments stay on screen when
+  a refresh fails, with a Retry, and say when they're waiting for a
+  connection.
+
 ## [0.13.0] - 2026-09-27
 
 ### Added
@@ -4322,7 +4462,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/theBGuy/GitDesktop/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/theBGuy/GitDesktop/compare/v0.12.2...v0.13.0
 [0.12.2]: https://github.com/theBGuy/GitDesktop/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/theBGuy/GitDesktop/compare/v0.12.0...v0.12.1
