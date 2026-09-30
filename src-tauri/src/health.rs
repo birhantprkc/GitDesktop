@@ -4,10 +4,19 @@
 //! detection behaves identically to the AI-provider setup (PATH + login-shell
 //! fallback, Windows `.cmd` shims, …).
 
+use std::path::Path;
+
 use serde::Serialize;
 
-use crate::agent::{run_capture, resolve_named, AuthStatus, DETECT_TIMEOUT};
-use crate::error::AppResult;
+use crate::agent::{exit_code_auth, resolve_named, run_capture, AuthStatus, DETECT_TIMEOUT};
+use crate::error::{AppError, AppResult};
+use crate::forge::futures_join_all;
+use crate::forge::glab::{
+    account_authorities, account_hostname, is_addressable_host, run_glab_raw,
+};
+use crate::forge::session::{
+    classify_glab_failure, gh_cli_auth_status, worst_host_auth, GlabFailure,
+};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,9 +70,89 @@ fn undetected(id: &str) -> ToolStatus {
     }
 }
 
+/// How one tool's sign-in state is read.
+#[derive(Clone, Copy)]
+enum AuthProbe {
+    /// No login concept, or no non-interactive status command.
+    None,
+    /// A local status command whose exit code is the whole verdict.
+    ExitCode(&'static [&'static str]),
+    /// gh's per-account `--json` report, which tells an outage from a rejected token.
+    Gh,
+    /// `glab auth status` per configured host, each classified as session health's is.
+    Glab,
+}
+
+/// One host's `glab auth status` verdict. The command validates online, so its
+/// failure text decides between a rejected credential and an outage; a probe that
+/// timed out is an outage too. The classifier's precedence assumes ONE host's
+/// output; the one multi-host report it reads is the bare probe's, whose limit
+/// [`glab_cli_auth`] documents.
+fn glab_auth(result: AppResult<(i32, String)>) -> AuthStatus {
+    match result {
+        Ok((0, _)) => AuthStatus::Authed,
+        Ok((_, output)) => match classify_glab_failure(&output.to_lowercase()) {
+            GlabFailure::Offline | GlabFailure::RateLimited => AuthStatus::Unreachable,
+            GlabFailure::NotConnected | GlabFailure::Broken => AuthStatus::NotAuthed,
+        },
+        Err(AppError::Timeout(_)) => AuthStatus::Unreachable,
+        Err(_) => AuthStatus::Unknown,
+    }
+}
+
+/// The glab sign-in probes that cover every account: `--hostname` for each host
+/// that flag can address, plus ONE bare probe (the `bool`) when a listed host or
+/// glab's own routing target can't be addressed by name (a non-default port, which
+/// `--hostname` refuses), or when nothing else would run. `hosts` must carry
+/// authorities with their ports: the bare probe follows glab's native routing, so
+/// a ported login is checked at its real authority with its own token, never as
+/// its bare host.
+fn glab_probe_plan(hosts: Vec<String>, target: &str) -> (Vec<String>, bool) {
+    let listed = hosts.len();
+    let pinned: Vec<String> = hosts
+        .into_iter()
+        .filter(|h| is_addressable_host(h))
+        .collect();
+    let bare = pinned.is_empty() || pinned.len() < listed || !is_addressable_host(target);
+    (pinned, bare)
+}
+
+/// glab's sign-in across its accounts, probed concurrently (the load waits on the
+/// slowest host, not their sum) and reduced by [`worst_host_auth`], as gh's row is.
+/// The bare probe reads glab's combined multi-host report with single-host
+/// precedence, so another host's connectivity wording in it can outrank a
+/// bare-covered host's rejection: a limit inherited from that report, narrowed by
+/// the pinned probes (whose rejections outrank it) and fixable by splitting the
+/// report per host. Deliberately not `gitlab_accounts_health`: its expiry reads and
+/// anti-flap re-probe sleep don't belong in this load.
+async fn glab_cli_auth(binary: &Path) -> AuthStatus {
+    let (pinned, bare) = glab_probe_plan(account_authorities().await, &account_hostname().await);
+    // run_glab_raw strips the environment's token for every host that isn't its
+    // own target, so a pinned probe never sends one host's token to another.
+    let probes = pinned.iter().map(|host| async move {
+        let args = ["auth", "status", "--hostname", host.as_str()];
+        let out = run_glab_raw(None, &args, DETECT_TIMEOUT).await;
+        glab_auth(out.map(|o| (o.code, format!("{}\n{}", o.stdout_lossy(), o.stderr))))
+    });
+    // run_capture_parts already applies sanitize_child_env; only token stripping is
+    // exempt here. Bare `glab auth status` follows glab's own precedence to the
+    // token's target, so this probe cannot address a foreign host.
+    let bare_probe = async {
+        if bare {
+            Some(glab_auth(
+                run_capture(binary, &["auth", "status"], DETECT_TIMEOUT).await,
+            ))
+        } else {
+            None
+        }
+    };
+    let (pinned_readings, bare_reading) = tokio::join!(futures_join_all(probes), bare_probe);
+    worst_host_auth(pinned_readings.into_iter().chain(bare_reading))
+}
+
 /// Detect one CLI: resolve it, read `--version`, and (when it has a login) its
-/// auth state. `auth_args` is `None` for tools without a login concept (git).
-async fn detect(id: &str, names: &[&str], auth_args: Option<&[&str]>) -> ToolStatus {
+/// auth state.
+async fn detect(id: &str, names: &[&str], auth: AuthProbe) -> ToolStatus {
     let Some(binary) = resolve_named(names, None).await else {
         return undetected(id);
     };
@@ -77,13 +166,13 @@ async fn detect(id: &str, names: &[&str], auth_args: Option<&[&str]>) -> ToolSta
         .and_then(|(_, out)| out.lines().next().map(|l| l.trim().to_string()))
         .filter(|s| !s.is_empty());
 
-    let authed = match auth_args {
-        None => AuthStatus::Unknown,
-        Some(args) => match run_capture(&binary, args, DETECT_TIMEOUT).await {
-            Ok((0, _)) => AuthStatus::Authed,
-            Ok(_) => AuthStatus::NotAuthed,
-            Err(_) => AuthStatus::Unknown,
-        },
+    let authed = match auth {
+        AuthProbe::None => AuthStatus::Unknown,
+        AuthProbe::ExitCode(args) => {
+            exit_code_auth(run_capture(&binary, args, DETECT_TIMEOUT).await)
+        }
+        AuthProbe::Gh => gh_cli_auth_status().await,
+        AuthProbe::Glab => glab_cli_auth(&binary).await,
     };
 
     ToolStatus {
@@ -95,28 +184,28 @@ async fn detect(id: &str, names: &[&str], auth_args: Option<&[&str]>) -> ToolSta
     }
 }
 
-/// One tool detection: id, candidate binary names, and the auth-status args for
-/// tools that have a login (`None` for tools without one).
-type Probe = (
-    &'static str,
-    &'static [&'static str],
-    Option<&'static [&'static str]>,
-);
+/// One tool detection: id, candidate binary names, and how its sign-in is read.
+type Probe = (&'static str, &'static [&'static str], AuthProbe);
 
 /// Every CLI the About screen reports on, in the order it displays them. Copilot
 /// has no non-interactive auth-status command (it authenticates via the OS
 /// credential store / a token env var), so its login state stays Unknown.
 static PROBES: [Probe; 7] = [
-    ("git", &["git"], None),
-    ("gh", &["gh"], Some(&["auth", "status"])),
-    // run_capture_parts already applies sanitize_child_env; only token stripping
-    // is exempt here. Bare `glab auth status` follows glab's own precedence to the
-    // token's target, so this probe cannot address a foreign host.
-    ("glab", &["glab"], Some(&["auth", "status"])),
-    ("claude", &["claude"], Some(&["auth", "status"])),
-    ("codex", &["codex"], Some(&["login", "status"])),
-    ("copilot", &["copilot"], None),
-    ("opencode", &["opencode"], None),
+    ("git", &["git"], AuthProbe::None),
+    ("gh", &["gh"], AuthProbe::Gh),
+    ("glab", &["glab"], AuthProbe::Glab),
+    (
+        "claude",
+        &["claude"],
+        AuthProbe::ExitCode(&["auth", "status"]),
+    ),
+    (
+        "codex",
+        &["codex"],
+        AuthProbe::ExitCode(&["login", "status"]),
+    ),
+    ("copilot", &["copilot"], AuthProbe::None),
+    ("opencode", &["opencode"], AuthProbe::None),
 ];
 
 /// OS/app info + the status of every external CLI, for Settings → About. The
@@ -131,13 +220,13 @@ pub async fn system_health() -> AppResult<SystemHealth> {
     // debug and fit — why dev never crashed).
     let handles: Vec<_> = PROBES
         .iter()
-        .map(|&(id, names, auth_args)| {
-            let handle = tauri::async_runtime::spawn(detect(id, names, auth_args));
+        .map(|&(id, names, auth)| {
+            let handle = tauri::async_runtime::spawn(detect(id, names, auth));
             (id, handle)
         })
         // collect() drives every spawn before the first await below; awaiting
-        // inside one loop would serialize seven probes, each up to three 20 s
-        // subprocess legs (resolve + two captures).
+        // inside one loop would serialize seven probes, each up to three timed
+        // subprocess legs (resolve, version, sign-in).
         .collect();
 
     let mut tools = Vec::with_capacity(handles.len());
@@ -169,6 +258,109 @@ mod tests {
         assert!(
             size < 16 * 1024,
             "system_health() future is {size} bytes (debug layout); keep per-tool detections spawned so it stays under 16 KiB"
+        );
+    }
+
+    #[test]
+    fn glab_outage_reads_unreachable_never_signed_out() {
+        for output in [
+            "Get \"https://gitlab.com/api/v4/user\": dial tcp: lookup gitlab.com: no such host",
+            "Post \"https://gitlab.com/oauth/token\": Bad Gateway",
+            "context deadline exceeded",
+            "429 Too Many Requests",
+        ] {
+            assert_eq!(
+                glab_auth(Ok((1, output.to_string()))),
+                AuthStatus::Unreachable,
+                "{output}"
+            );
+        }
+        assert_eq!(
+            glab_auth(Err(AppError::Timeout(20))),
+            AuthStatus::Unreachable
+        );
+    }
+
+    #[test]
+    fn glab_rejected_or_missing_login_reads_signed_out() {
+        for output in [
+            "No token provided in configuration file",
+            "gitlab.com: API call failed: 401 Unauthorized",
+        ] {
+            assert_eq!(
+                glab_auth(Ok((1, output.to_string()))),
+                AuthStatus::NotAuthed,
+                "{output}"
+            );
+        }
+        assert_eq!(glab_auth(Ok((0, String::new()))), AuthStatus::Authed);
+        assert_eq!(glab_auth(Err(AppError::GlabNotFound)), AuthStatus::Unknown);
+    }
+
+    #[test]
+    fn glab_ported_login_rides_the_bare_probe() {
+        use crate::forge::glab::account_authorities_from;
+        // Plans straight from the enumeration the probe really reads. `target` is
+        // glab's routing target (`GITLAB_HOST`, else the config `host:`, else
+        // gitlab.com), spelled out per case.
+        let plan = |config: Option<&str>, env: Option<&str>, target: &str| {
+            glab_probe_plan(account_authorities_from(config, env, Some("t")), target)
+        };
+        let signed_in = glab_auth(Ok((0, String::new())));
+        let revoked = glab_auth(Ok((1, "401 Unauthorized".to_string())));
+
+        // A ported saved key is never probed as its bare host: the bare probe covers
+        // it whatever the default target is.
+        let ported_key = "hosts:\n  gitlab.example:8443:\n    token: x\n";
+        let (pinned, bare) = plan(Some(ported_key), None, "gitlab.com");
+        assert!(!pinned.contains(&"gitlab.example".to_string()));
+        assert!(bare);
+        let ported_default =
+            "host: gitlab.example:8443\nhosts:\n  gitlab.example:8443:\n    token: x\n";
+        let (pinned, bare) = plan(Some(ported_default), None, "gitlab.example:8443");
+        assert_eq!((pinned, bare), (Vec::<String>::new(), true));
+
+        // Env-only login at a ported authority: the same shape.
+        let (pinned, bare) = plan(
+            None,
+            Some("https://gitlab.example:8443"),
+            "gitlab.example:8443",
+        );
+        assert!(pinned.is_empty());
+        assert!(bare);
+
+        // Mixed: the addressable host is probed by name and the ported one bare,
+        // even when the default target is addressable; both readings reduce.
+        let mixed = "hosts:\n  gitlab.com:\n  gitlab.example:8443:\n";
+        let (pinned, bare) = plan(Some(mixed), None, "gitlab.com");
+        assert_eq!(pinned, ["gitlab.com"]);
+        assert!(bare);
+        assert_eq!(worst_host_auth([revoked, signed_in]), AuthStatus::NotAuthed);
+        assert_eq!(worst_host_auth([signed_in, signed_in]), AuthStatus::Authed);
+
+        // Every account addressable: pinned probes only; none at all: bare only.
+        let (pinned, bare) = plan(Some("hosts:\n  gitlab.com:\n"), None, "gitlab.com");
+        assert_eq!(pinned, ["gitlab.com"]);
+        assert!(!bare);
+        assert_eq!(
+            glab_probe_plan(account_authorities_from(None, None, None), "gitlab.com"),
+            (Vec::new(), true)
+        );
+    }
+
+    #[test]
+    fn glab_rejected_host_outranks_an_unreachable_one() {
+        let host = |output: &str| glab_auth(Ok((1, output.to_string())));
+        let revoked = host("gitlab.com: API call failed: 401 Unauthorized");
+        // One host rejects its token while another can't be reached: signed out.
+        let offline = host("Get \"https://vpn.example/api/v4/user\": dial tcp: i/o timeout");
+        assert_eq!(worst_host_auth([offline, revoked]), AuthStatus::NotAuthed);
+        let throttled = host("429 Too Many Requests");
+        assert_eq!(worst_host_auth([throttled, revoked]), AuthStatus::NotAuthed);
+        // Every other host fine, one unreachable: can't reach.
+        assert_eq!(
+            worst_host_auth([AuthStatus::Authed, offline]),
+            AuthStatus::Unreachable
         );
     }
 }

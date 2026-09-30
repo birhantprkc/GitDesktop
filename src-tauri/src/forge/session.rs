@@ -21,6 +21,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Notify;
 
+use crate::agent::AuthStatus;
 use crate::error::{AppError, AppResult};
 use crate::forge::glab::{run_glab_raw, GLAB_TIMEOUT};
 use crate::forge::model::Provider;
@@ -509,6 +510,60 @@ fn unreachable_forge_error(host: &str, detail: Option<String>) -> AppError {
         Some(d) => format!("Couldn't reach {host} to check the GitHub sign-in: {d}"),
         None => format!("Couldn't reach {host} to check the GitHub sign-in."),
     })
+}
+
+/// gh's sign-in state across every host it holds, for Settings → About. Reads the
+/// `--json` report because only its per-account `error` carries transport text: an
+/// outage reads `Unreachable`, never signed out; `Unknown` when gh is missing or fails
+/// for a reason that names no outage.
+pub(crate) async fn gh_cli_auth_status() -> AuthStatus {
+    match gh_cli_auth_from_probe(gh_status_json(None).await) {
+        Some(status) => status,
+        None => session_auth_status(github_health_text_fallback(None).await.state),
+    }
+}
+
+/// The pure step behind [`gh_cli_auth_status`]; `None` defers to the old-gh text
+/// fallback. Hosts reduce through [`worst_host_auth`].
+fn gh_cli_auth_from_probe(probe: AppResult<GhJsonProbe>) -> Option<AuthStatus> {
+    let map = match probe {
+        Ok(GhJsonProbe::Parsed(map)) => map,
+        Ok(GhJsonProbe::UnknownFlag) => return None,
+        Ok(GhJsonProbe::Inconclusive(_)) => return Some(AuthStatus::Unknown),
+        Err(AppError::Timeout(_)) => return Some(AuthStatus::Unreachable),
+        Err(_) => return Some(AuthStatus::Unknown),
+    };
+    Some(worst_host_auth(map.values().map(|accounts| {
+        session_auth_status(classify_gh_host(accounts).state)
+    })))
+}
+
+/// One CLI's About-screen sign-in over its per-host readings, shared by the gh and
+/// glab rows. The worst host wins (rejected, then unreachable, then unknown) since
+/// "signed in" must hold for every host the CLI holds a login for; no host at all
+/// reads signed out.
+pub(crate) fn worst_host_auth(hosts: impl IntoIterator<Item = AuthStatus>) -> AuthStatus {
+    let rank = |status: &AuthStatus| match status {
+        AuthStatus::Authed => 0,
+        AuthStatus::Unknown => 1,
+        AuthStatus::Unreachable => 2,
+        AuthStatus::NotAuthed => 3,
+    };
+    hosts
+        .into_iter()
+        .max_by_key(rank)
+        .unwrap_or(AuthStatus::NotAuthed)
+}
+
+/// A session reading as the About screen's sign-in state. A rate limit is
+/// `Unreachable`: the forge answered without a verdict on the credential.
+fn session_auth_status(state: SessionState) -> AuthStatus {
+    match state {
+        SessionState::Healthy => AuthStatus::Authed,
+        SessionState::Broken | SessionState::NotConnected => AuthStatus::NotAuthed,
+        SessionState::Offline | SessionState::RateLimited => AuthStatus::Unreachable,
+        SessionState::CliMissing => AuthStatus::Unknown,
+    }
 }
 
 /// When the rate limit on `host` resets (epoch seconds), from the headers of
@@ -2477,6 +2532,115 @@ check your internet connection or https://githubstatus.com";
         assert!(gh_host_auth(&GhJsonProbe::Inconclusive(None), "github.com")
             .unwrap()
             .is_none());
+    }
+
+    // ── the About screen's gh sign-in verdict ──
+    fn cli_auth(json: &str) -> Option<AuthStatus> {
+        gh_cli_auth_from_probe(Ok(GhJsonProbe::Parsed(parse_hosts(json))))
+    }
+
+    #[test]
+    fn cli_auth_outage_reads_unreachable_never_signed_out() {
+        for map in [
+            one_account("timeout", None),
+            one_account(
+                "error",
+                Some("Get \"https://api.github.com/\": unexpected EOF"),
+            ),
+            one_account("error", Some(GH_403_PRIMARY)),
+        ] {
+            assert_eq!(
+                gh_cli_auth_from_probe(Ok(GhJsonProbe::Parsed(map))),
+                Some(AuthStatus::Unreachable)
+            );
+        }
+        assert_eq!(
+            gh_cli_auth_from_probe(Err(AppError::Timeout(30))),
+            Some(AuthStatus::Unreachable)
+        );
+    }
+
+    #[test]
+    fn cli_auth_signed_in_and_signed_out() {
+        assert_eq!(
+            gh_cli_auth_from_probe(Ok(GhJsonProbe::Parsed(one_account("success", None)))),
+            Some(AuthStatus::Authed)
+        );
+        assert_eq!(
+            gh_cli_auth_from_probe(Ok(GhJsonProbe::Parsed(one_account("error", Some(GH_401))))),
+            Some(AuthStatus::NotAuthed)
+        );
+        assert_eq!(cli_auth(r#"{"hosts":{}}"#), Some(AuthStatus::NotAuthed));
+        assert_eq!(
+            cli_auth(r#"{"hosts":{"github.com":[]}}"#),
+            Some(AuthStatus::NotAuthed)
+        );
+    }
+
+    #[test]
+    fn cli_auth_worst_host_wins() {
+        let rejected = format!(
+            r#"{{"hosts":{{"github.com":[{{"state":"timeout","active":true,"login":"a"}}],"ghes.example":[{{"state":"error","active":true,"login":"b","error":{}}}]}}}}"#,
+            serde_json::to_string(GH_401).unwrap(),
+        );
+        assert_eq!(cli_auth(&rejected), Some(AuthStatus::NotAuthed));
+        let one_unreachable = r#"{"hosts":{"github.com":[{"state":"success","active":true,"login":"a"}],"ghes.example":[{"state":"timeout","active":true,"login":"b"}]}}"#;
+        assert_eq!(cli_auth(one_unreachable), Some(AuthStatus::Unreachable));
+        let all_healthy = r#"{"hosts":{"github.com":[{"state":"success","active":true,"login":"a"}],"ghes.example":[{"state":"success","active":true,"login":"b"}]}}"#;
+        assert_eq!(cli_auth(all_healthy), Some(AuthStatus::Authed));
+    }
+
+    #[test]
+    fn cli_auth_unknown_or_fallback_off_the_json_path() {
+        assert_eq!(gh_cli_auth_from_probe(Ok(GhJsonProbe::UnknownFlag)), None);
+        assert_eq!(
+            gh_cli_auth_from_probe(Ok(GhJsonProbe::Inconclusive(None))),
+            Some(AuthStatus::Unknown)
+        );
+        assert_eq!(
+            gh_cli_auth_from_probe(Err(AppError::GhNotFound)),
+            Some(AuthStatus::Unknown)
+        );
+    }
+
+    #[test]
+    fn worst_host_auth_ranks_rejected_then_unreachable_then_unknown() {
+        use AuthStatus::{Authed, NotAuthed, Unknown, Unreachable};
+        assert_eq!(worst_host_auth([]), NotAuthed);
+        assert_eq!(worst_host_auth([Authed, Authed]), Authed);
+        assert_eq!(worst_host_auth([Authed, Unknown]), Unknown);
+        assert_eq!(worst_host_auth([Unknown, Unreachable, Authed]), Unreachable);
+        assert_eq!(
+            worst_host_auth([Unreachable, NotAuthed, Unknown]),
+            NotAuthed
+        );
+    }
+
+    #[test]
+    fn gh_host_readings_are_never_unknown() {
+        // gh's per-host readings never map to Unknown, so gh's row never reaches
+        // the shared reducer's Unknown tier — its verdict stays a pure
+        // rejected > unreachable > signed-in ranking.
+        let mut readings: Vec<_> = [
+            ("success", None),
+            ("error", Some(GH_401)),
+            ("error", Some(GH_403_PRIMARY)),
+            (
+                "error",
+                Some("Get \"https://api.github.com/\": unexpected EOF"),
+            ),
+            ("timeout", None),
+            ("", None),
+            ("something_new", None),
+        ]
+        .into_iter()
+        .map(|(state, error)| one_account(state, error))
+        .collect();
+        readings.push(parse_hosts(r#"{"hosts":{"github.com":[]}}"#));
+        for map in readings {
+            let status = session_auth_status(classify_gh_host(&map["github.com"]).state);
+            assert_ne!(status, AuthStatus::Unknown);
+        }
     }
 
     // ── github_health's confirmed-Broken disproof ──

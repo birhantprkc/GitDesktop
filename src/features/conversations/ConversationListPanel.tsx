@@ -5,6 +5,9 @@ import {
   type ReactElement,
   type ReactNode,
   type Ref,
+  useCallback,
+  useLayoutEffect,
+  useRef,
 } from "react";
 import { ListRowSkeletons } from "@/components/list-row-skeleton";
 import { Button } from "@/components/ui/button";
@@ -106,7 +109,9 @@ function SectionHeader(props: {
  *  Mount it whenever the section renders: the live region only announces text
  *  that arrives after it is in the DOM, so a healthy section keeps it empty
  *  and sr-only (never display:none, which drops it from the a11y tree). The
- *  actions sit outside the region so they aren't read as part of the status. */
+ *  actions sit outside the region so they aren't read as part of the status.
+ *  Retry unmounts when a refresh lands or a pressed retry parks offline, so the
+ *  always-mounted wrapper is the landing spot that keeps focus off `<body>`. */
 export function DegradedListNotice(props: {
   noun: string;
   degraded: boolean;
@@ -130,15 +135,42 @@ export function DegradedListNotice(props: {
     extraAction,
     className,
   } = props;
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const retryShown = degraded && onRetry !== undefined;
+  const retryWasShown = useRef(retryShown);
+  // Whether THIS notice's Retry held focus as it left the DOM, so a sibling
+  // notice losing its Retry in the same commit can't claim focus it never had.
+  // Read in the ref cleanup, which React runs just before removing the node,
+  // while focus still sits on it.
+  const retryHeldFocus = useRef(false);
+  const retryRef = useCallback(
+    (node: HTMLButtonElement | null) => () => {
+      retryHeldFocus.current = document.activeElement === node;
+    },
+    [],
+  );
+  // Only Retry going away can drop focus, so only that edge rescues, and only
+  // from `<body>`; preventScroll keeps the viewer's scroll position.
+  useLayoutEffect(() => {
+    const was = retryWasShown.current;
+    retryWasShown.current = retryShown;
+    if (!was || retryShown) return;
+    const owned = retryHeldFocus.current;
+    retryHeldFocus.current = false;
+    if (owned && document.activeElement === document.body)
+      wrapRef.current?.focus({ preventScroll: true });
+  }, [retryShown]);
   return (
     <div
+      ref={wrapRef}
+      tabIndex={-1}
       className={
         degraded
           ? cn(
-              "flex flex-wrap items-center gap-x-1.5 px-3 pb-1 text-[11px] text-muted-foreground",
+              "flex flex-wrap items-center gap-x-1.5 px-3 pb-1 text-[11px] text-muted-foreground outline-none",
               className,
             )
-          : "sr-only"
+          : "sr-only outline-none"
       }
     >
       <p role="status">
@@ -149,6 +181,7 @@ export function DegradedListNotice(props: {
       </p>
       {degraded && onRetry && (
         <button
+          ref={retryRef}
           type="button"
           aria-label={retryLabel ?? `Retry loading ${noun}`}
           onClick={onRetry}
