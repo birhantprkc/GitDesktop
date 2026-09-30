@@ -1,6 +1,7 @@
 import { ArrowSquareOutIcon } from "@phosphor-icons/react";
+import { notifyManager, useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { ReactNode } from "react";
+import { type ReactNode, useCallback, useSyncExternalStore } from "react";
 import { Markdown } from "@/components/markdown/markdown";
 import { PathText } from "@/components/path-text";
 import { RelativeTime } from "@/components/relative-time";
@@ -12,6 +13,7 @@ import { DegradedListNotice } from "@/features/conversations/ConversationListPan
 import {
   detailNoticeMessage,
   offlinePendingMessage,
+  refreshFailed,
   resolveDetailPane,
 } from "@/features/conversations/remote-section-state";
 import type {
@@ -747,6 +749,60 @@ function BbAnnotationDetail({
   );
 }
 
+/** Each category's key segment in its hook's `["repo", repo, "findings",
+ *  <segment>, limit]` key (lib/github, lib/gitlab, lib/bitbucket
+ *  security-findings); keep in step with those literals. */
+const FINDINGS_KEY_SEGMENT: Record<SelectedFinding["type"], string> = {
+  alert: "alerts",
+  codeScanning: "codeScanning",
+  secretScanning: "secretScanning",
+  advisory: "advisories",
+  glFinding: "gitlab",
+  bbFinding: "bitbucket",
+};
+
+/**
+ * The largest-limit page of one findings category already in the cache that
+ * `holds` the selected finding, read only while `segment` is set. A failed Load
+ * more leaves the shared limit on the failed size until the panel's rollback
+ * syncs it, and never syncs while the panel sits in a hidden `<Activity>`. Pages
+ * are tried largest first, since a bigger page can still lack a finding a
+ * smaller one holds. Read in render and on every cache change, so no effect
+ * gates it.
+ */
+function useCachedFindingsPage(
+  repoPath: string,
+  segment: string | null,
+  holds: (page: unknown) => boolean,
+): unknown {
+  const cache = useQueryClient().getQueryCache();
+  // Subscribes only while a fallback is wanted: every cache event re-runs the
+  // snapshot's scan, which the healthy case has no reason to pay for.
+  const subscribe = useCallback(
+    (onStoreChange: () => void) =>
+      segment === null
+        ? () => undefined
+        : cache.subscribe(notifyManager.batchCalls(onStoreChange)),
+    [cache, segment],
+  );
+  // Returns the cache's own data reference, which stays one identity while the
+  // entry is unchanged, as useSyncExternalStore requires of a snapshot.
+  const getSnapshot = useCallback((): unknown => {
+    if (segment === null) return undefined;
+    const pages = cache
+      .findAll({ queryKey: ["repo", repoPath, "findings", segment] })
+      .flatMap((q) => {
+        const limit = q.queryKey[4];
+        return q.state.data === undefined || typeof limit !== "number"
+          ? []
+          : [{ limit, data: q.state.data }];
+      })
+      .sort((a, b) => b.limit - a.limit);
+    return pages.find((p) => holds(p.data))?.data;
+  }, [cache, repoPath, segment, holds]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
 export function FindingDetailView({
   repoPath,
   active,
@@ -819,31 +875,33 @@ export function FindingDetailView({
   };
   const query = selectedFinding ? queryByType[selectedFinding.type] : alerts;
 
-  /** The selected finding's detail from the loaded data, or null when it isn't
-   *  in the list. */
-  function findingDetail(): ReactNode {
+  /** The selected finding's detail from `page`, one page of its category's
+   *  data (the exact read's, or a cached page of the same key family and so the
+   *  same shape), or null when that page doesn't hold it. */
+  function detailIn(page: unknown): ReactNode {
     if (selectedFinding?.type === "alert") {
-      const alert = alerts.data?.alerts.find(
+      const alert = (page as typeof alerts.data)?.alerts.find(
         (a) => a.number === selectedFinding.number,
       );
       if (alert) return <AlertDetail alert={alert} />;
     } else if (selectedFinding?.type === "codeScanning") {
-      const alert = codeScanning.data?.alerts.find(
+      const alert = (page as typeof codeScanning.data)?.alerts.find(
         (a) => a.number === selectedFinding.number,
       );
       if (alert) return <CodeScanningDetail alert={alert} />;
     } else if (selectedFinding?.type === "secretScanning") {
-      const alert = secrets.data?.alerts.find(
+      const alert = (page as typeof secrets.data)?.alerts.find(
         (a) => a.number === selectedFinding.number,
       );
       if (alert) return <SecretScanningDetail alert={alert} />;
     } else if (selectedFinding?.type === "advisory") {
-      const advisory = advisories.data?.advisories.find(
+      const advisory = (page as typeof advisories.data)?.advisories.find(
         (a) => a.ghsaId === selectedFinding.ghsaId,
       );
       if (advisory) return <AdvisoryDetail advisory={advisory} />;
-    } else if (selectedFinding?.type === "glFinding" && gl.data) {
-      const data = gl.data;
+    } else if (selectedFinding?.type === "glFinding") {
+      const data = page as typeof gl.data;
+      if (!data) return null;
       if (selectedFinding.category === "codeQuality") {
         const finding = data.codeQuality.findings.find(
           (f) => codeQualityFindingId(f) === selectedFinding.id,
@@ -870,8 +928,8 @@ export function FindingDetailView({
             />
           );
       }
-    } else if (selectedFinding?.type === "bbFinding" && bb.data) {
-      const report = bb.data.reports.find(
+    } else if (selectedFinding?.type === "bbFinding") {
+      const report = (page as typeof bb.data)?.reports.find(
         (r) => r.uuid === selectedFinding.reportUuid,
       );
       const annotation = report?.annotations.find(
@@ -883,14 +941,29 @@ export function FindingDetailView({
     return null;
   }
 
+  // The exact-limit read has nothing to show (a failed Load more still keys it
+  // on the failed limit), so a cached page holding this finding stands in.
+  const cachedPage = useCachedFindingsPage(
+    repoPath,
+    selectedFinding &&
+      enabled &&
+      query.data === undefined &&
+      (query.isError || query.isPending)
+      ? FINDINGS_KEY_SEGMENT[selectedFinding.type]
+      : null,
+    (page) => detailIn(page) !== null,
+  );
+
+  const detail = detailIn(query.data ?? cachedPage);
   // Loaded data always renders: a refresh that fails or waits offline keeps
   // the finding under a notice. Pending is gated on `enabled`: a disabled query
   // stays `isPending` forever, so an ungated skeleton would spin here if the
-  // repo lost the capability mid-session.
+  // repo lost the capability mid-session. A cached page is only ever one that
+  // holds this finding, so with none a miss still reads as the error.
   const pane = resolveDetailPane({
     pending: enabled && query.isPending,
     error: query.isError,
-    hasData: query.data !== undefined,
+    hasData: query.data !== undefined || cachedPage !== undefined,
     paused: query.isPaused,
   });
   if (pane === "skeleton") {
@@ -926,7 +999,6 @@ export function FindingDetailView({
     );
   }
 
-  const detail = findingDetail();
   if (detail) {
     return (
       <div className="flex h-full min-h-0 flex-col">
@@ -938,12 +1010,10 @@ export function FindingDetailView({
           // as placeholder.
           message={detailNoticeMessage({
             noun: "finding",
-            isError: query.isError,
+            isError: refreshFailed(query),
             stale: false,
           })}
-          // Only a failed refresh gets a Retry: offline, it would park again at
-          // once, and reconnecting resumes the read by itself.
-          onRetry={query.isError ? () => query.refetch() : undefined}
+          onRetry={refreshFailed(query) ? () => query.refetch() : undefined}
           className="shrink-0 border-b px-4 py-1.5"
         />
         <div className="min-h-0 flex-1">{detail}</div>

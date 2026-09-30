@@ -135,19 +135,44 @@ pub(crate) async fn account_status(host: &str) -> AppResult<ForgeStatus> {
         Err(e) => return Err(e),
     };
 
-    // Token present. Probe `/user`; a success authenticates and yields the login.
-    match http::bb_get_json::<BbUser>(&creds, "user", "user", BbOpKind::Read).await {
-        Ok(user) => {
-            let login = user.username.or(user.display_name);
-            Ok(bitbucket_status(true, true, host, None, login))
+    // Token present. Probe `/user`; a success authenticates and yields the login,
+    // else the stored username labels the account.
+    let (authenticated, login) =
+        bitbucket_auth_outcome(http::bb_get_classified(&creds, "user").await)?;
+    let login = match login {
+        Some(login) => Some(login),
+        None => read_stored_username().await,
+    };
+    Ok(bitbucket_status(true, authenticated, host, None, login))
+}
+
+/// `(authenticated, login)` from the `/user` probe, on `bitbucket_health`'s ladder.
+/// A probe that never got an answer (the classified read errs only on transport) or
+/// got a 5xx rejects: react-query keeps the last good status on a rejection, where
+/// `false` would tell the user to reconnect a token nothing disproved. A 403 is a
+/// valid scope-limited token; a 401 and a 429 read false (a rate limit is session
+/// health's to report). A 2xx body that isn't a user also rejects, since unreadable
+/// bytes prove nothing about the token; a parsed user without a name leaves the login
+/// to the caller's stored-username fallback.
+fn bitbucket_auth_outcome(probe: AppResult<(u16, String)>) -> AppResult<(bool, Option<String>)> {
+    let (status, body) = probe.map_err(|e| {
+        AppError::Bitbucket(format!(
+            "Couldn't reach Bitbucket to check the sign-in.\n{e}"
+        ))
+    })?;
+    match status {
+        200..=299 => {
+            let user = serde_json::from_str::<BbUser>(&body).map_err(|e| {
+                http::bb_unreadable("user", format!("could not parse Bitbucket user: {e}"))
+            })?;
+            Ok((true, user.username.or(user.display_name)))
         }
-        // A stored-but-invalid/expired token: installed (we have one) but not
-        // authenticated. Fall back to the stored username for the login label.
-        Err(AppError::Bitbucket(_)) => {
-            let login = read_stored_username().await;
-            Ok(bitbucket_status(true, false, host, None, login))
-        }
-        Err(e) => Err(e),
+        403 => Ok((true, None)),
+        500..=599 => Err(AppError::Bitbucket(format!(
+            "Couldn't reach Bitbucket to check the sign-in.\n{}",
+            http::bb_error_detail(status, &body, BbOpKind::Read)
+        ))),
+        _ => Ok((false, None)),
     }
 }
 
@@ -6061,6 +6086,69 @@ mod my_work_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unanswered_sign_in_probe_rejects_instead_of_reading_signed_out() {
+        let answered = |status: u16, body: &str| Ok((status, body.to_string()));
+        let transport = || {
+            Err(AppError::Bitbucket(
+                "Bitbucket request failed: error sending request: connection failed".into(),
+            ))
+        };
+        for (label, probe) in [
+            ("transport", transport()),
+            ("503", answered(503, "upstream unavailable")),
+            ("500", answered(500, "")),
+        ] {
+            let outcome = bitbucket_auth_outcome(probe);
+            assert!(
+                matches!(&outcome, Err(AppError::Bitbucket(m))
+                    if m.starts_with("Couldn't reach Bitbucket to check the sign-in.\n")),
+                "{label}: {outcome:?}"
+            );
+        }
+        let Err(AppError::Bitbucket(message)) = bitbucket_auth_outcome(transport()) else {
+            unreachable!("asserted above");
+        };
+        assert!(message.ends_with("connection failed"), "{message}");
+        // An answered 2xx whose body isn't a user proves nothing about the token.
+        for body in ["not json", "", r#""a string""#, r#"{"username":42}"#] {
+            let outcome = bitbucket_auth_outcome(answered(200, body));
+            assert!(
+                matches!(&outcome, Err(AppError::Bitbucket(m))
+                    if m.starts_with("Couldn't read the user from Bitbucket.\n")),
+                "{body:?}: {outcome:?}"
+            );
+        }
+        for (label, probe, expected) in [
+            (
+                "200",
+                answered(200, r#"{"username":"me","display_name":"Me"}"#),
+                (true, Some("me".to_string())),
+            ),
+            (
+                "200 display name only",
+                answered(200, r#"{"display_name":"Me"}"#),
+                (true, Some("Me".to_string())),
+            ),
+            // A parsed user without a name authenticates; `None` hands the login to
+            // account_status's stored-username fallback.
+            (
+                "200 parsed user without a name",
+                answered(200, r#"{"uuid":"{u}","username":null}"#),
+                (true, None),
+            ),
+            ("401", answered(401, "expired"), (false, None)),
+            ("403", answered(403, "privilege scopes"), (true, None)),
+            ("429", answered(429, "rate limited"), (false, None)),
+        ] {
+            assert_eq!(
+                bitbucket_auth_outcome(probe).ok(),
+                Some(expected),
+                "{label}"
+            );
+        }
+    }
 
     #[test]
     fn read_error_summaries_use_natural_nouns_and_keep_raw_detail() {

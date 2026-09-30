@@ -69,6 +69,7 @@ import { ReactionBar } from "@/features/conversations/ReactionBar";
 import {
   detailNoticeMessage,
   offlinePendingMessage,
+  refreshFailed,
   resolveDetailPane,
 } from "@/features/conversations/remote-section-state";
 import { AuthorAvatar, LabelChip } from "@/features/conversations/Thread";
@@ -2022,9 +2023,10 @@ export function RemotePrView({
     );
   }
 
+  const detailFailed = refreshFailed(details);
   const detailNotice = detailNoticeMessage({
     noun: prNoun,
-    isError: details.isError,
+    isError: detailFailed,
     stale: detailsStale,
   });
 
@@ -2119,16 +2121,19 @@ export function RemotePrView({
     );
   }
 
-  const fileDiff = effectivePath
-    ? {
-        filePath: effectivePath,
-        text: fileSections.get(effectivePath) ?? "",
-        isBinary: (fileSections.get(effectivePath) ?? "").includes(
-          "Binary files ",
-        ),
-        isTruncated: false,
-      }
-    : undefined;
+  // No diff loaded means no file diff: an empty section synthesized from the
+  // missing text would render as "No changes to show" through a cold outage.
+  const fileDiff =
+    effectivePath && prDiff.data !== undefined
+      ? {
+          filePath: effectivePath,
+          text: fileSections.get(effectivePath) ?? "",
+          isBinary: (fileSections.get(effectivePath) ?? "").includes(
+            "Binary files ",
+          ),
+          isTruncated: false,
+        }
+      : undefined;
 
   // A file's unified-diff section by path, so the in-diff thread cards (Files tab)
   // and the Conversation suggestion threads can synthesize a hunk on hunk-less
@@ -2595,9 +2600,7 @@ export function RemotePrView({
         noun={`this ${prNoun}`}
         degraded={detailPane === "content-degraded"}
         message={detailNotice}
-        // Only a failed refresh gets a Retry: offline, it would park again at
-        // once, and reconnecting resumes the read by itself.
-        onRetry={details.isError ? () => details.refetch() : undefined}
+        onRetry={detailFailed ? () => details.refetch() : undefined}
         className="shrink-0 border-b px-4 py-1.5"
       />
       <header className="@container/pr-header space-y-2 border-b px-4 py-3">
@@ -3331,6 +3334,9 @@ export function RemotePrView({
             fileDiff={fileDiff}
             isPending={prDiff.isPending}
             isError={prDiff.isError}
+            isPaused={prDiff.isPaused}
+            onRetry={() => void prDiff.refetch()}
+            dataIsPlaceholder={prDiff.isPlaceholderData}
             // The same threads + handlers/gates the Conversation block uses — one
             // filtered list off the top-level read, not a second fetch, so an
             // unsubmitted GitHub review's drafts stay out of BOTH tabs rather than
