@@ -2,6 +2,7 @@ import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useState } from "react";
 import { toast } from "sonner";
+import { DisabledReasonButton } from "@/components/disabled-reason-button";
 import { LabeledGroup } from "@/components/form/labeled-group";
 import { SelectClipText } from "@/components/select-clip-text";
 import { Badge } from "@/components/ui/badge";
@@ -28,9 +29,23 @@ import {
 } from "@/lib/git/queries";
 import type { PagesInfo } from "@/lib/git/types";
 import { toastError } from "@/lib/toast";
-import { AsyncErrorCard, InlineConfirm } from "./parts";
+import { useOnline } from "@/lib/use-online";
+import {
+  InlineConfirm,
+  OFFLINE_WRITE_REASON,
+  RemoteFormSection,
+} from "./parts";
+import {
+  type PendingSent,
+  reconcileTouched,
+  stampSent,
+  type TouchedEdit,
+} from "./touched-draft";
 
 const PATHS = ["/", "/docs"];
+
+/** The enabled form's editable fields, as its draft keys them. */
+type PagesField = "branch" | "path" | "cname";
 
 /** Labels for the source select — without them Base UI shows the raw value
  *  ("workflow") in the trigger; the popup renders from this map too, so the two
@@ -49,38 +64,41 @@ export function PagesSection({
 }) {
   const pages = usePages(repoPath, open);
 
-  if (pages.isPending) {
-    return (
-      <div className="min-w-0 space-y-3">
-        <Skeleton className="h-9 w-full" />
-        <Skeleton className="h-20 w-full" />
-      </div>
-    );
-  }
-  if (pages.isError) {
-    return (
-      <AsyncErrorCard
-        title="Couldn't load Pages."
-        error={pages.error}
-        hint="If this is a permissions error, managing Pages needs repo-admin access."
-      />
-    );
-  }
-
-  return pages.data ? (
-    <PagesEnabled
-      key={pages.dataUpdatedAt}
-      repoPath={repoPath}
-      pages={pages.data}
-    />
-  ) : (
-    <PagesDisabled repoPath={repoPath} />
+  return (
+    <RemoteFormSection
+      query={pages}
+      noun="Pages settings"
+      skeleton={
+        <div className="min-w-0 space-y-3">
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-20 w-full" />
+        </div>
+      }
+      errorTitle="Couldn't load Pages."
+      errorHint="If this is a permissions error, managing Pages needs repo-admin access."
+    >
+      {(data) =>
+        // `null` is a loaded answer: Pages isn't enabled.
+        data ? (
+          <PagesEnabled
+            key={repoPath}
+            repoPath={repoPath}
+            pages={data}
+            dataUpdatedAt={pages.dataUpdatedAt}
+            isError={pages.isError}
+          />
+        ) : (
+          <PagesDisabled repoPath={repoPath} />
+        )
+      }
+    </RemoteFormSection>
   );
 }
 
 function PagesDisabled({ repoPath }: { repoPath: string }) {
   const branches = useBranches(repoPath);
   const enable = useEnablePages(repoPath);
+  const online = useOnline();
   const [mode, setMode] = useState<"branch" | "workflow">("branch");
   const [branch, setBranch] = useState("");
   const [path, setPath] = useState("/");
@@ -169,10 +187,15 @@ function PagesDisabled({ repoPath }: { repoPath: string }) {
           </div>
         </div>
       )}
-      <Button size="sm" disabled={!canEnable} onClick={handleEnable}>
+      <DisabledReasonButton
+        size="sm"
+        disabled={!canEnable || !online}
+        reason={online ? undefined : OFFLINE_WRITE_REASON}
+        onClick={handleEnable}
+      >
         {enable.isPending && <Spinner data-icon="inline-start" />}
         Enable Pages
-      </Button>
+      </DisabledReasonButton>
     </div>
   );
 }
@@ -180,16 +203,54 @@ function PagesDisabled({ repoPath }: { repoPath: string }) {
 function PagesEnabled({
   repoPath,
   pages,
+  dataUpdatedAt,
+  isError,
 }: {
   repoPath: string;
   pages: PagesInfo;
+  /** When `pages` last loaded; a failed refetch doesn't advance it. */
+  dataUpdatedAt: number;
+  /** The read's last fetch failed; stays set through a refetch until one lands. */
+  isError: boolean;
 }) {
   const branches = useBranches(repoPath);
   const update = useUpdatePages(repoPath);
   const disable = useDisablePages(repoPath);
-  const [branch, setBranch] = useState(pages.sourceBranch);
-  const [path, setPath] = useState(pages.sourcePath || "/");
-  const [cname, setCname] = useState(pages.cname);
+  // An absent field shows the server's value. Touched fields retire per
+  // `reconcileTouched` — never on the save itself, so a save whose refetch
+  // failed keeps its values on screen.
+  const [edit, setEdit] = useState<TouchedEdit<PagesField, string> | null>(
+    null,
+  );
+  const [pending, setPending] = useState<PendingSent<
+    PagesField,
+    string
+  > | null>(null);
+  const server: Record<PagesField, string> = {
+    branch: pages.sourceBranch,
+    path: pages.sourcePath || "/",
+    cname: pages.cname,
+  };
+  const reconciled = reconcileTouched({
+    edit,
+    server,
+    pending,
+    dataUpdatedAt,
+    isError,
+  });
+  if (reconciled.edit !== edit) setEdit(reconciled.edit);
+  if (reconciled.pending !== pending) setPending(reconciled.pending);
+  const setField = (field: PagesField, value: string) =>
+    setEdit((e) => ({ ...e, [field]: value }));
+  const setBranch = (value: string) => setField("branch", value);
+  const setPath = (value: string) => setField("path", value);
+  const setCname = (value: string) => setField("cname", value);
+  function markSent(at: number, sent: TouchedEdit<PagesField, string>) {
+    setPending((p) => stampSent(p, at, sent));
+  }
+  const branch = edit?.branch ?? server.branch;
+  const path = edit?.path ?? server.path;
+  const cname = edit?.cname ?? server.cname;
   const [confirmingDisable, setConfirmingDisable] = useState(false);
 
   const isWorkflow = pages.buildType === "workflow";
@@ -204,8 +265,7 @@ function PagesEnabled({
       ? [pages.sourceBranch, ...filtered]
       : filtered;
   })();
-  const sourceChanged =
-    branch !== pages.sourceBranch || path !== (pages.sourcePath || "/");
+  const sourceChanged = branch !== server.branch || path !== server.path;
   // HTTPS can only be enforced once GitHub has issued the TLS certificate for a
   // custom domain. Without a custom domain (default *.github.io) there's no
   // certificate object at all and HTTPS is always available, so never gate on it.
@@ -220,8 +280,10 @@ function PagesEnabled({
       : "Waiting for the HTTPS certificate to be issued for this domain";
 
   async function handleUpdateSource() {
+    const at = dataUpdatedAt;
     try {
       await update.mutateAsync({ buildType: "legacy", branch, path });
+      markSent(at, { branch, path });
       toast.success("Source updated");
     } catch (e) {
       toastError(e);
@@ -229,8 +291,10 @@ function PagesEnabled({
   }
 
   async function handleSaveDomain() {
+    const at = dataUpdatedAt;
     try {
       await update.mutateAsync({ cname });
+      markSent(at, { cname });
       toast.success(cname ? "Domain saved" : "Domain removed");
     } catch (e) {
       toastError(e);

@@ -35,7 +35,13 @@ import {
 import type { SecurityFeature, SecurityStatus } from "@/lib/git/types";
 import { toastError } from "@/lib/toast";
 import { useSeedOnOpen } from "@/lib/use-seed-on-open";
-import { AsyncErrorCard, InlineConfirm } from "./parts";
+import { InlineConfirm, RemoteFormSection } from "./parts";
+import {
+  type PendingSent,
+  reconcileTouched,
+  stampSent,
+  type TouchedEdit,
+} from "./touched-draft";
 
 /** Dependabot / dependency-graph options GitHub exposes to NO repo-level API —
  *  they're web-UI-only. (Version updates is handled by the dependabot.yml
@@ -160,36 +166,34 @@ export function SecuritySection({
 }) {
   const security = useSecurity(repoPath, open);
 
-  if (security.isPending) {
-    return (
-      <div className="min-w-0 space-y-3">
-        <Skeleton className="h-12 w-full" />
-        <Skeleton className="h-12 w-full" />
-        <Skeleton className="h-12 w-full" />
-      </div>
-    );
-  }
-  if (security.isError || !security.data) {
-    return (
-      <AsyncErrorCard
-        title="Couldn't load security."
-        error={security.error}
-        hint="If this is a permissions error, these settings need repo-admin access."
-      />
-    );
-  }
-
-  // Remount on refetch so the draft reseeds after a save.
   return (
-    <div className="min-w-0 space-y-4">
-      <SecurityForm
-        key={security.dataUpdatedAt}
-        repoPath={repoPath}
-        status={security.data}
-      />
-      <DependabotVersionUpdates repoPath={repoPath} open={open} />
-      <MoreOnGitHub repoPath={repoPath} open={open} />
-    </div>
+    <RemoteFormSection
+      query={security}
+      noun="security settings"
+      skeleton={
+        <div className="min-w-0 space-y-3">
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+        </div>
+      }
+      errorTitle="Couldn't load security."
+      errorHint="If this is a permissions error, these settings need repo-admin access."
+    >
+      {(status) => (
+        <div className="min-w-0 space-y-4">
+          <SecurityForm
+            key={repoPath}
+            repoPath={repoPath}
+            status={status}
+            dataUpdatedAt={security.dataUpdatedAt}
+            isError={security.isError}
+          />
+          <DependabotVersionUpdates repoPath={repoPath} open={open} />
+          <MoreOnGitHub repoPath={repoPath} open={open} />
+        </div>
+      )}
+    </RemoteFormSection>
   );
 }
 
@@ -404,19 +408,43 @@ function MoreOnGitHub({ repoPath, open }: { repoPath: string; open: boolean }) {
 function SecurityForm({
   repoPath,
   status,
+  dataUpdatedAt,
+  isError,
 }: {
   repoPath: string;
   status: SecurityStatus;
+  /** When `status` last loaded; a failed refetch doesn't advance it. */
+  dataUpdatedAt: number;
+  /** The read's last fetch failed; stays set through a refetch until one lands. */
+  isError: boolean;
 }) {
   const apply = useApplySecurity(repoPath);
   const seed = useMemo(() => toDraft(status), [status]);
-  const [draft, setDraft] = useState(seed);
-
-  const dirty = FEATURES.some((f) => draft[f.key] !== seed[f.key]);
+  // Touched toggles only, retired per `reconcileTouched` — never on the save
+  // itself, so a save whose refetch failed keeps its values on screen.
+  const [edit, setEdit] = useState<TouchedEdit<
+    SecurityFeature,
+    boolean
+  > | null>(null);
+  const [pending, setPending] = useState<PendingSent<
+    SecurityFeature,
+    boolean
+  > | null>(null);
+  const reconciled = reconcileTouched({
+    edit,
+    server: seed,
+    pending,
+    dataUpdatedAt,
+    isError,
+  });
+  if (reconciled.edit !== edit) setEdit(reconciled.edit);
+  if (reconciled.pending !== pending) setPending(reconciled.pending);
+  const draft: Draft = { ...seed, ...edit };
+  const dirty = edit !== null;
 
   function set(key: SecurityFeature, value: boolean) {
-    setDraft((d) => {
-      const next = { ...d, [key]: value };
+    setEdit((e) => {
+      const next = { ...e, [key]: value };
       // Turning a parent off turns its dependents off too.
       if (!value) {
         for (const f of FEATURES) if (f.dependsOn === key) next[f.key] = false;
@@ -426,11 +454,17 @@ function SecurityForm({
   }
 
   async function save() {
-    const changes = FEATURES.filter((f) => draft[f.key] !== seed[f.key]).map(
-      (f) => ({ feature: f.key, enabled: draft[f.key] }),
-    );
+    // FEATURES order is the dependency-safe apply order.
+    const changes = FEATURES.filter(
+      (f) => edit !== null && f.key in edit && draft[f.key] !== seed[f.key],
+    ).map((f) => ({ feature: f.key, enabled: draft[f.key] }));
+    const at = dataUpdatedAt;
     try {
       await apply.mutateAsync(changes);
+      const sent: TouchedEdit<SecurityFeature, boolean> = Object.fromEntries(
+        changes.map((c) => [c.feature, c.enabled]),
+      );
+      setPending((p) => stampSent(p, at, sent));
       toast.success("Security settings saved");
     } catch (e) {
       toastError(e);
@@ -475,7 +509,7 @@ function SecurityForm({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setDraft(seed)}
+            onClick={() => setEdit(null)}
             disabled={apply.isPending}
           >
             Discard
