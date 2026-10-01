@@ -45,7 +45,14 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CommentComposer } from "@/features/conversations/CommentComposer";
 import { CommentEditor } from "@/features/conversations/CommentEditor";
+import { DegradedListNotice } from "@/features/conversations/ConversationListPanel";
 import { ConversationScrollArea } from "@/features/conversations/ConversationScrollArea";
+import {
+  detailNoticeMessage,
+  offlinePendingMessage,
+  refreshFailed,
+  resolveDetailPane,
+} from "@/features/conversations/remote-section-state";
 import { useThreadJumpHotkeys } from "@/features/conversations/useThreadJumpHotkeys";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { JiraIssueSidebar } from "@/features/issues/JiraIssueSidebar";
@@ -179,22 +186,20 @@ function StatusMenu({
         <StatusChip category={category} name={name} interactive />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-44">
-        {transitions.isPending ? (
-          <DropdownMenuItem disabled>Loading transitions…</DropdownMenuItem>
-        ) : transitions.isError ? (
-          <DropdownMenuItem
-            // Base UI item: onClick fires the action (Radix-style onSelect
-            // TYPECHECKS — it's the DOM text-selection event — but never fires
-            // on click); closeOnClick={false} keeps the menu open for retry.
-            closeOnClick={false}
-            onClick={() => transitions.refetch()}
-          >
-            Couldn't load transitions — retry
-          </DropdownMenuItem>
-        ) : (transitions.data ?? []).length === 0 ? (
+        {/* Data first: loaded transitions outlive a failed or parked refetch,
+            and a failure's retry row sits under them. */}
+        {transitions.data === undefined ? (
+          transitions.isPaused ? (
+            <DropdownMenuItem disabled>
+              {offlinePendingMessage("transitions")}
+            </DropdownMenuItem>
+          ) : refreshFailed(transitions) ? null : (
+            <DropdownMenuItem disabled>Loading transitions…</DropdownMenuItem>
+          )
+        ) : transitions.data.length === 0 ? (
           <DropdownMenuItem disabled>No transitions available</DropdownMenuItem>
         ) : (
-          (transitions.data ?? []).map((t) => {
+          transitions.data.map((t) => {
             const { Icon, tone } = statusPresentation(t.toStatusCategory);
             // A self-transition → checked, non-interactive current row.
             const isCurrent = t.toStatusName === name;
@@ -213,6 +218,17 @@ function StatusMenu({
               </DropdownMenuItem>
             );
           })
+        )}
+        {refreshFailed(transitions) && (
+          <DropdownMenuItem
+            // Base UI item: onClick fires the action (Radix-style onSelect
+            // TYPECHECKS — it's the DOM text-selection event — but never fires
+            // on click); closeOnClick={false} keeps the menu open for retry.
+            closeOnClick={false}
+            onClick={() => transitions.refetch()}
+          >
+            Couldn't load transitions — retry
+          </DropdownMenuItem>
         )}
       </DropdownMenuContent>
     </DropdownMenu>
@@ -406,21 +422,20 @@ export function JiraPriorityMenu({
         <CaretDownIcon className="size-3 shrink-0 opacity-60" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-44">
-        {priorities.isPending ? (
-          <DropdownMenuItem disabled>Loading priorities…</DropdownMenuItem>
-        ) : priorities.isError ? (
-          <DropdownMenuItem
-            // Base UI item: onClick fires the action (onSelect never does, see
-            // StatusMenu); closeOnClick={false} keeps the menu open for retry.
-            closeOnClick={false}
-            onClick={() => priorities.refetch()}
-          >
-            Couldn't load priorities — retry
-          </DropdownMenuItem>
-        ) : (priorities.data ?? []).length === 0 ? (
+        {/* Data first, like StatusMenu's: retained priorities outlive a failed
+            or parked refetch, with the retry row under them. */}
+        {priorities.data === undefined ? (
+          priorities.isPaused ? (
+            <DropdownMenuItem disabled>
+              {offlinePendingMessage("priorities")}
+            </DropdownMenuItem>
+          ) : refreshFailed(priorities) ? null : (
+            <DropdownMenuItem disabled>Loading priorities…</DropdownMenuItem>
+          )
+        ) : priorities.data.length === 0 ? (
           <DropdownMenuItem disabled>No priorities available</DropdownMenuItem>
         ) : (
-          (priorities.data ?? []).map((p) => (
+          priorities.data.map((p) => (
             <DropdownMenuCheckboxItem
               key={p.id}
               checked={p.name === priorityName}
@@ -439,6 +454,16 @@ export function JiraPriorityMenu({
               {p.name}
             </DropdownMenuCheckboxItem>
           ))
+        )}
+        {refreshFailed(priorities) && (
+          <DropdownMenuItem
+            // Base UI item: onClick fires the action (onSelect never does, see
+            // StatusMenu); closeOnClick={false} keeps the menu open for retry.
+            closeOnClick={false}
+            onClick={() => priorities.refetch()}
+          >
+            Couldn't load priorities — retry
+          </DropdownMenuItem>
         )}
       </DropdownMenuContent>
     </DropdownMenu>
@@ -555,6 +580,9 @@ export function JiraLabelsPopover({
       .sort((a, b) => a.localeCompare(b));
   }, [known.data, draft, trimmed]);
 
+  // A park is not a failure: it offers no retry, which would only park again.
+  const labelsFailed = refreshFailed(known);
+
   // Offer to create the typed label when it's a valid, non-existing string.
   const canCreate =
     trimmed.length > 0 &&
@@ -632,32 +660,17 @@ export function JiraLabelsPopover({
                   </button>
                 )}
                 <div className="mt-1 max-h-56 overflow-y-auto">
-                  {/* Honest error copy + retry only when the fetch failed AND
-                    there are no local (drafted/checked) options to fall back
-                    on. */}
-                  {options.length === 0 && !canCreate && known.isError ? (
-                    <button
-                      type="button"
-                      // data-label-row: keeps ArrowDown-from-input reaching the
-                      // retry row in the error state (it's the only row then).
-                      data-label-row
-                      tabIndex={-1}
-                      onClick={() => known.refetch()}
-                      className="flex w-full cursor-pointer items-center px-1 py-1 text-left text-xs text-muted-foreground hover:text-foreground"
-                    >
-                      Couldn't load labels — retry
-                    </button>
-                  ) : (
-                    options.length === 0 &&
-                    !canCreate && (
-                      <p className="px-1 py-1 text-xs text-muted-foreground">
-                        {known.isPending
-                          ? "Loading labels…"
-                          : trimmed
-                            ? "No matching labels."
-                            : "This site has no labels."}
-                      </p>
-                    )
+                  {/* A failure's retry row sits under the options instead. */}
+                  {options.length === 0 && !canCreate && !labelsFailed && (
+                    <p className="px-1 py-1 text-xs text-muted-foreground">
+                      {known.data === undefined
+                        ? known.isPaused
+                          ? offlinePendingMessage("labels")
+                          : "Loading labels…"
+                        : trimmed
+                          ? "No matching labels."
+                          : "This site has no labels."}
+                    </p>
                   )}
                   {options.map((name, i) => {
                     // Traversal index: the create row (when present) is 0, so the
@@ -691,6 +704,22 @@ export function JiraLabelsPopover({
                       </div>
                     );
                   })}
+                  {/* Data first: the options above outlive a failed refetch, and
+                      its retry is the last row, reachable by arrows like them. */}
+                  {labelsFailed && (
+                    <button
+                      type="button"
+                      data-label-row
+                      tabIndex={-1}
+                      onClick={() => known.refetch()}
+                      onKeyDown={(e) => {
+                        onRowKeyDown(e, (canCreate ? 1 : 0) + options.length);
+                      }}
+                      className="flex w-full cursor-pointer items-center px-1 py-1 text-left text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      Couldn't load labels — retry
+                    </button>
+                  )}
                 </div>
               </div>
               <p className="mt-1 border-t px-1 pt-1.5 text-[11px] text-muted-foreground">
@@ -1529,12 +1558,12 @@ export function JiraIssueView({
   // remounting its own per-issue drafts.
   const issueIdentity = `${repoPath}#${issueKey}`;
   const compose = useKeyedEntityState(issueIdentity, "");
+  // Retained content counts as settled: a failed refresh keeps rendering it.
   const threadActive =
     selectedIssue?.kind === "jira" &&
     selectedIssue.id === issueKey &&
     !!details.data &&
-    !details.isPlaceholderData &&
-    !details.isError;
+    !details.isPlaceholderData;
   const jumpRef = useThreadJumpHotkeys(threadActive);
   // The composer sits below the thread AND the sidebar, so reaching it by Tab
   // means crossing the whole rail — this is the keyboard route past it. Enabled
@@ -1563,7 +1592,16 @@ export function JiraIssueView({
     );
   }
 
-  if (details.isPending) {
+  // Loaded content always renders: an errored background refetch keeps the
+  // issue on screen rather than wiping it for a placeholder.
+  const pane = resolveDetailPane({
+    pending: details.isPending,
+    error: details.isError,
+    hasData: details.data !== undefined,
+    paused: details.isPaused,
+    fetching: details.isFetching,
+  });
+  if (pane === "skeleton") {
     return (
       <div className="space-y-3 p-4">
         <Skeleton className="h-5 w-2/3" />
@@ -1573,7 +1611,12 @@ export function JiraIssueView({
       </div>
     );
   }
-  if (details.isError || !details.data) {
+  if (pane === "offline") {
+    return (
+      <DiffPlaceholder message={offlinePendingMessage("this Jira issue")} />
+    );
+  }
+  if (!details.data) {
     return <DiffPlaceholder message="Could not load this Jira issue" />;
   }
 
@@ -1588,6 +1631,14 @@ export function JiraIssueView({
     : issue.url;
   const detailsStale = details.isPlaceholderData;
   const staleDim = detailsStale && "opacity-80";
+  // Retained content says why it may be out of date: a failed refresh with its
+  // Retry, or a parked one (no Retry, which would only park again).
+  const detailFailed = refreshFailed(details);
+  const detailNotice = detailNoticeMessage({
+    noun: "Jira issue",
+    isError: detailFailed,
+    stale: detailsStale,
+  });
   // Which hold the composer names, ranked: the switch window outranks a write the
   // viewer started, being the hold they can't have caused themselves.
   const composerReason = (() => {
@@ -1634,6 +1685,13 @@ export function JiraIssueView({
       className="@container/jira-detail flex h-full flex-col"
       aria-busy={Boolean(staleDim)}
     >
+      <DegradedListNotice
+        noun="this Jira issue"
+        degraded={pane === "content-degraded"}
+        message={detailNotice}
+        onRetry={detailFailed ? () => void details.refetch() : undefined}
+        className="shrink-0 border-b px-4 py-1.5"
+      />
       <header className="space-y-2 border-b px-4 py-3">
         {/* `flex-auto`, not `flex-1`: a basis-0 title never triggers the wrap, so
             the actions would stay put and the title collapse instead. Growing also

@@ -16,6 +16,7 @@ import type {
 } from "@/lib/git/types";
 import { useRemoteSlug } from "@/lib/repo-lens/queries";
 import { parseableDate } from "@/lib/time";
+import { useRetryFocusRescue } from "./ConversationListPanel";
 import { ProjectFieldsEditor } from "./ProjectFieldsEditor";
 import { projectScopeMissing } from "./ProjectsPopover";
 import { offlinePendingMessage } from "./remote-section-state";
@@ -415,6 +416,23 @@ export function ProjectFieldValues({
     values.isPaused &&
     (values.data === undefined || values.error !== null);
   const offlineMessage = offlinePendingMessage(FIELD_LABEL.toLowerCase());
+  // Still gated: a disabled query keeps whatever error it last cached, so an item
+  // whose boards — or whose scope — have since gone stays silent.
+  const errored =
+    lines.length === 0 &&
+    !parked &&
+    canRead &&
+    values.error !== null &&
+    boardsKnown;
+  // A failure being refetched over loaded-but-lineless values hasn't settled, so
+  // it loads like a first read rather than keeping the error and its Retry up.
+  const retrying = errored && values.isFetching;
+  const skeleton = loading || retrying;
+  const failedShown = errored && !skeleton;
+  // A pressed Retry swaps the error for the skeleton (a never-loaded read resets
+  // to pending; a loaded one starts fetching): focus lands on the host that
+  // survives instead of `<body>`.
+  const { hostRef, retryRef } = useRetryFocusRescue(failedShown);
 
   const content = (() => {
     switch (true) {
@@ -433,7 +451,7 @@ export function ProjectFieldValues({
             ))}
           </div>
         );
-      case loading:
+      case skeleton:
         return <Skeleton className="h-4 w-40" aria-hidden />;
       case parked:
         return (
@@ -441,13 +459,12 @@ export function ProjectFieldValues({
             {offlineMessage}
           </span>
         );
-      // Still gated: a disabled query keeps whatever error it last cached, so an
-      // item whose boards — or whose scope — have since gone stays silent.
-      case canRead && values.error !== null && boardsKnown:
+      case failedShown && values.error !== null:
         return (
           <span className="inline-flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground">
             {presentError(values.error).summary}
             <button
+              ref={retryRef}
               type="button"
               aria-label={`Retry loading ${FIELD_LABEL.toLowerCase()}`}
               className="cursor-pointer underline hover:text-foreground"
@@ -524,7 +541,7 @@ export function ProjectFieldValues({
   // be left standing over it.
   if (!cells)
     return (
-      <div className="space-y-1.5">
+      <div ref={hostRef} tabIndex={-1} className="space-y-1.5 outline-none">
         {heading ?? (
           <p className="text-xs font-medium text-muted-foreground">
             {FIELD_LABEL}
@@ -537,14 +554,19 @@ export function ProjectFieldValues({
   return (
     <>
       {heading ?? <MetaFieldLabel>{FIELD_LABEL}</MetaFieldLabel>}
-      <MetaValueCell
-        label={FIELD_LABEL}
-        empty={content === null && truncatedNote === null}
-        busy={lines.length === 0 && loading}
-      >
-        {content}
-        {truncatedNote}
-      </MetaValueCell>
+      {/* The cell takes no ref and swaps its children for the empty placeholder,
+          so the host every state shares wraps the whole cell: a block grid item,
+          which lays out as the cell alone did. */}
+      <div ref={hostRef} tabIndex={-1} className="min-w-0 outline-none">
+        <MetaValueCell
+          label={FIELD_LABEL}
+          empty={content === null && truncatedNote === null}
+          busy={lines.length === 0 && skeleton}
+        >
+          {content}
+          {truncatedNote}
+        </MetaValueCell>
+      </div>
     </>
   );
 }
