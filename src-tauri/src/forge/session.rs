@@ -642,6 +642,46 @@ async fn github_health_text_fallback(host: Option<&str>) -> SessionHealth {
     classify_gh_text_report(out.code, &report, host_str)
 }
 
+/// Mask dotted hosts after trailing punctuation and one numeric port; recognize scheme URLs.
+/// Never trim host prefixes: `(client.timeout` must remain a Go transport diagnostic.
+fn is_host_or_url_token(word: &str) -> bool {
+    let mut bare = word;
+    let mut port_stripped = false;
+    loop {
+        let previous = bare;
+        bare = bare.trim_end_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '.');
+        if !port_stripped {
+            if let Some((host, _)) = bare
+                .rsplit_once(':')
+                .filter(|(_, port)| !port.is_empty() && port.bytes().all(|c| c.is_ascii_digit()))
+            {
+                bare = host;
+                port_stripped = true;
+            }
+        }
+        bare = bare.trim_end_matches('.');
+        if bare == previous {
+            break;
+        }
+    }
+    let host = bare.contains('.')
+        && bare.split('.').all(|label| {
+            !label.is_empty()
+                && label.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+        });
+    // Go errors wrap URLs in quotes; status text can wrap them in parentheses.
+    let url = word
+        .trim_start_matches(['"', '\'', '('])
+        .split_once("://")
+        .is_some_and(|(scheme, _)| {
+            scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+                && scheme
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.'))
+        });
+    host || url
+}
+
 /// The pure step behind [`github_health_text_fallback`]: one plain `gh auth status`
 /// result (exit code + combined report) classified for `host_str`.
 fn classify_gh_text_report(code: i32, report: &str, host_str: &str) -> SessionHealth {
@@ -652,29 +692,27 @@ fn classify_gh_text_report(code: i32, report: &str, host_str: &str) -> SessionHe
         .find(|a| a.host == host_str)
         .or_else(|| accounts.first());
     // Account metadata and host/URL-shaped tokens cannot name a transport verdict.
-    // A trailing colon still counts as host-shaped.
     let transport_residue = report
         .lines()
         .filter(|line| !line.contains("Logged in to") && !line.contains("Active account:"))
-        .flat_map(str::split_whitespace)
+        .flat_map(|line| {
+            let mut words: Vec<_> = line.split_whitespace().collect();
+            // Only gh's failed-login grammar gives undotted tokens account roles.
+            if words.len() >= 9
+                && matches!(words[0], "X" | "x")
+                && words[1..6] == ["Failed", "to", "log", "in", "to"]
+            {
+                if words[7] == "account" {
+                    words[6] = "";
+                    words[8] = "";
+                } else if words[7..9] == ["using", "token"] {
+                    words[6] = "";
+                }
+            }
+            words
+        })
         .map(|word| {
-            let bare = word.trim_end_matches(':');
-            let host = bare.contains('.')
-                && bare.split('.').all(|label| {
-                    !label.is_empty()
-                        && label.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
-                });
-            // Go errors wrap URLs in quotes; status text can wrap them in parentheses.
-            let url = word
-                .trim_start_matches(['"', '\'', '('])
-                .split_once("://")
-                .is_some_and(|(scheme, _)| {
-                    scheme.starts_with(|c: char| c.is_ascii_alphabetic())
-                        && scheme.bytes().all(|c| {
-                            c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.')
-                        })
-                });
-            if host || url {
+            if is_host_or_url_token(word) {
                 ""
             } else {
                 word
@@ -904,6 +942,11 @@ pub(crate) enum GlabFailure {
 /// Unknown text degrades to `Broken` (never a panic) so an unrecognized glab message
 /// still surfaces as an actionable "reconnect" rather than being swallowed.
 pub(crate) fn classify_glab_failure(combined_lower: &str) -> GlabFailure {
+    let transport_residue = combined_lower
+        .split_whitespace()
+        .map(|word| if is_host_or_url_token(word) { "" } else { word })
+        .collect::<Vec<_>>()
+        .join(" ");
     const NOT_CONNECTED: [&str; 4] = ["not logged in", "no token", "no accounts", "no hosts"];
     // Proxy/server outage status text (measured via a 502 proxy: `Post "…/oauth/token":
     // Bad Gateway`) is Offline as for gh, in session health and the sign-in probe, never
@@ -930,11 +973,11 @@ pub(crate) fn classify_glab_failure(combined_lower: &str) -> GlabFailure {
         // or a network hang; both read Offline.
         // Multi-word phrases match as substrings because a hostname cannot contain a space.
         if n.contains(' ') {
-            combined_lower.contains(n)
+            transport_residue.contains(n)
         } else {
-            glab_has_transport_word(combined_lower, n)
+            glab_has_transport_word(&transport_residue, n)
         }
-    }) || OFFLINE_STATUS.iter().any(|n| combined_lower.contains(n))
+    }) || OFFLINE_STATUS.iter().any(|n| transport_residue.contains(n))
     {
         GlabFailure::Offline
     } else {
@@ -2406,6 +2449,69 @@ mod tests {
     }
 
     #[test]
+    fn gh_failed_login_proxy_account_is_broken() {
+        // SYNTHETIC: only the positional account name carries a transport word.
+        let report = "  ✓ Logged in to github.com as alice\n  X Failed to log in to github.com account proxy (keyring)\n  - The token in keyring is invalid.";
+        assert_eq!(
+            classify_gh_text_report(1, report, "github.com").state,
+            SessionState::Broken
+        );
+    }
+
+    #[test]
+    fn gh_failed_login_dotless_host_is_broken() {
+        // SYNTHETIC: a dotless GHES host has the same positional protection.
+        let report = "  ✓ Logged in to github.com as alice\n  X Failed to log in to proxy account bob (keyring)\n  - The token in keyring is invalid.";
+        assert_eq!(
+            classify_gh_text_report(1, report, "github.com").state,
+            SessionState::Broken
+        );
+    }
+
+    #[test]
+    fn gh_using_token_dotless_host_is_broken() {
+        // SYNTHETIC: only the host slot of the using-token grammar is masked.
+        let report = "  ✓ Logged in to github.com as alice\n  X Failed to log in to proxy using token (keyring)";
+        assert_eq!(
+            classify_gh_text_report(1, report, "github.com").state,
+            SessionState::Broken
+        );
+    }
+
+    #[test]
+    fn gh_using_token_free_prose_still_votes_offline() {
+        // SYNTHETIC: matching words outside the exact grammar still vote.
+        for detail in [
+            "Failed to log in to proxy using token (keyring)",
+            "proxy unavailable",
+        ] {
+            let report = format!(
+                "  ✓ Logged in to github.com as alice\n  X Failed to log in to proxy using token (keyring)\n  - {detail}"
+            );
+            assert_eq!(
+                classify_gh_text_report(1, &report, "github.com").state,
+                SessionState::Offline,
+                "{detail}"
+            );
+        }
+    }
+
+    #[test]
+    fn gh_failed_login_free_prose_still_votes_offline() {
+        // SYNTHETIC: masking is positional, never a ban on the account's spelling.
+        for detail in ["proxy unavailable", "failed to log in to proxy account bob"] {
+            let report = format!(
+                "  ✓ Logged in to github.com as alice\n  X Failed to log in to proxy account proxy (keyring)\n  - {detail}"
+            );
+            assert_eq!(
+                classify_gh_text_report(1, &report, "github.com").state,
+                SessionState::Offline,
+                "{detail}"
+            );
+        }
+    }
+
+    #[test]
     fn old_gh_text_report_reads_offline_only_on_transport_words() {
         /// SYNTHETIC: the dotted Go diagnostic carries the only transport verdict.
         // cli/cli v2.0.0 pkg/cmd/auth/status/status.go: CurrentLoginName uses "api call failed: %s".
@@ -3133,6 +3239,99 @@ check your internet connection or https://githubstatus.com";
                 "{not_throttled}"
             );
         }
+    }
+
+    #[test]
+    fn glab_transport_label_host_is_broken() {
+        // SYNTHETIC: an entire hostname label is not a standalone diagnostic.
+        for report in [
+            "x timeout.acme.com: 401 unauthorized",
+            "x timeout.acme.com:8443: 401 unauthorized",
+        ] {
+            assert_eq!(classify_glab_failure(report), GlabFailure::Broken, "{report}");
+        }
+    }
+
+    #[test]
+    fn trailing_host_punctuation_cells_are_masked() {
+        // SYNTHETIC: trailing punctuation never supplies an outage verdict.
+        for (cell, token) in [
+            ("colon", "timeout.acme.com:"),
+            ("comma", "timeout.acme.com,"),
+            ("period", "timeout.acme.com."),
+            ("semicolon", "timeout.acme.com;"),
+            ("closing parenthesis", "timeout.acme.com)"),
+            ("double quote", "timeout.acme.com\""),
+            ("single quote", "timeout.acme.com'"),
+            ("stacked delimiters", "timeout.acme.com),"),
+            ("port and stacked delimiters", "timeout.acme.com:8443\","),
+            ("port and sentence punctuation", "timeout.acme.com:8443\",."),
+            ("dotted host before port", "timeout.acme.com.:8443),"),
+        ] {
+            assert!(is_host_or_url_token(token), "{cell}");
+            assert_eq!(
+                classify_glab_failure(&format!("x {token} 401 unauthorized")),
+                GlabFailure::Broken,
+                "{cell}"
+            );
+            let report = format!(
+                "✓ Logged in to github.com as alice\nX api call failed: {token} token invalid"
+            );
+            assert_eq!(
+                classify_gh_text_report(1, &report, "github.com").state,
+                SessionState::Broken,
+                "{cell}"
+            );
+        }
+        assert_eq!(
+            classify_glab_failure("can't reach timeout.acme.com."),
+            GlabFailure::Broken
+        );
+    }
+
+    #[test]
+    fn trailing_host_punctuation_covers_the_character_class() {
+        for punctuation in (b'!'..=b'~')
+            .filter(|c| c.is_ascii_punctuation() && *c != b'-')
+            .map(char::from)
+            .chain(['…', '”', '’', '。'])
+        {
+            for token in [
+                format!("timeout.acme.com{punctuation}"),
+                format!("timeout.acme.com:8443{punctuation})."),
+            ] {
+                assert!(is_host_or_url_token(&token), "{token}");
+            }
+        }
+    }
+
+    #[test]
+    fn trailing_host_punctuation_preserves_transport_voters_and_leading_delimiters() {
+        // SYNTHETIC: leading delimiters and undotted verdicts stay diagnostic text.
+        for token in [
+            "(client.timeout",
+            "timeout.",
+            "connection.",
+            "\"timeout.acme.com\".",
+            "timeout.acme.com:8443:443",
+        ] {
+            assert!(!is_host_or_url_token(token), "{token}");
+            assert_eq!(classify_glab_failure(token), GlabFailure::Offline, "{token}");
+            assert_eq!(
+                classify_gh_text_report(1, token, "github.com").state,
+                SessionState::Offline,
+                "{token}"
+            );
+        }
+    }
+
+    #[test]
+    fn glab_standalone_timeout_stays_offline() {
+        // SYNTHETIC: the verdict word survives masking the hostname.
+        assert_eq!(
+            classify_glab_failure("x timeout.acme.com: timeout"),
+            GlabFailure::Offline
+        );
     }
 
     #[test]
