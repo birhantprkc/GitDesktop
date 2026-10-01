@@ -37,10 +37,10 @@ use crate::forge::Forge;
 use crate::github::actions::{CiRunPage, RunDetail, RunJob, WorkflowRun};
 use crate::github::issue::{IssueDetails, IssueInfo, IssueReactions, Milestone, Reaction};
 use crate::github::pr::{
-    ApprovalState, CommitCommentOut, DraftCommentIn, ExternalReviewItem, PrAuthor, PrCheckOut,
-    PrCiStatus, PrCommitOut, PrDetails, PrFileOut, PrHeadRef, PrInfo, PrListLabel, PrMergeability,
-    PrPollInfo, PrRef, PrStackInfo, PrStackMember, PrThreadOut, RepoLabel, ReviewSubmitOut,
-    ReviewThreadOut, STACKS_TIMEOUT,
+    checks_or_unknown, ApprovalState, CommitCommentOut, DraftCommentIn, ExternalReviewItem,
+    PrAuthor, PrCheckOut, PrCiStatus, PrCommitOut, PrDetails, PrFileOut, PrHeadRef, PrInfo,
+    PrListLabel, PrMergeability, PrPollInfo, PrRef, PrStackInfo, PrStackMember, PrThreadOut,
+    RepoLabel, ReviewSubmitOut, ReviewThreadOut, STACKS_TIMEOUT,
 };
 use crate::github::release::{ReleaseAsset, ReleaseDetails, ReleaseInfo};
 use crate::state::AppState;
@@ -1803,8 +1803,7 @@ struct GlabMrChanges {
     #[serde(default, deserialize_with = "null_to_default")]
     changes: Vec<GlabChange>,
     /// The head commit's pipeline (`null` when the MR has no CI). Its jobs become the
-    /// PR-view check rollup. `id` addresses the jobs endpoint; the frontend routes the
-    /// per-job `job_id` back through `forge_ci_job_logs` for the inline log peek.
+    /// check rollup; pipelines outside the target project expose link-out checks only.
     #[serde(default)]
     head_pipeline: Option<GlabHeadPipeline>,
     /// Mergeability, carried server-side on the `/changes` payload — so the detail
@@ -1823,11 +1822,19 @@ struct GlabMrChanges {
     target_project_id: Option<u64>,
 }
 
-/// The `head_pipeline` object embedded in an MR payload — only `id` (the jobs
-/// fetch) is needed; each check links via its own per-job `web_url`.
+/// The MR's head pipeline and its owning project, which can differ from the target.
 #[derive(Deserialize)]
 struct GlabHeadPipeline {
     id: u64,
+    #[serde(default, deserialize_with = "null_to_default")]
+    project_id: Option<u64>,
+}
+
+impl GlabHeadPipeline {
+    /// The owner when it differs from the MR target; either id unknown keeps the target route.
+    fn cross_project_id(&self, target_project_id: Option<u64>) -> Option<u64> {
+        self.project_id.filter(|id| target_project_id.is_some_and(|target| target != *id))
+    }
 }
 
 /// Count added/deleted lines in a GitLab per-file diff. The input is hunk-only
@@ -2210,11 +2217,14 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
     })
     .collect();
 
-    // CI checks — the head pipeline's jobs (best-effort; empty when the MR has no
-    // pipeline or the jobs fetch fails).
-    let checks = match &mr.head_pipeline {
-        Some(p) => pipeline_checks(repo_path, &enc, p.id).await,
-        None => Vec::new(),
+    // Checks are additive: a failed jobs read leaves the view available with an
+    // explicitly unknown list; an absent pipeline is a known empty list.
+    let (checks, checks_unknown) = match &mr.head_pipeline {
+        Some(p) => {
+            let cross_project_id = p.cross_project_id(mr.target_project_id);
+            checks_or_unknown(pipeline_checks(repo_path, &enc, p.id, cross_project_id).await)
+        }
+        None => (Vec::new(), false),
     };
 
     let colors = project_label_colors(repo_path, &enc).await;
@@ -2342,6 +2352,7 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
         // never cascades, so an unknown chain can't hide a multi-MR merge.
         stack_unknown: false,
         members_unknown: false,
+        checks_unknown,
         mergeability: map_gl_mergeability(
             &mr.state,
             mr.has_conflicts,
@@ -6829,31 +6840,41 @@ fn map_job_check_status(status: &str) -> String {
     .to_string()
 }
 
-/// The MR head pipeline's jobs mapped onto the PR-view check rollup. Best-effort: a
-/// missing pipeline or a failed jobs fetch yields an empty list (checks are additive
-/// to the view, never fatal). Each job carries its own `web_url` (link-out) plus the
-/// pipeline id as `run_id` and the job id as `job_id` (both stringified — GitLab ids
-/// exceed the JS safe-int range) so the frontend's inline log peek routes `job_id`
-/// through `forge_ci_job_logs`.
-async fn pipeline_checks(repo_path: &str, enc: &str, pipeline_id: u64) -> Vec<PrCheckOut> {
-    let endpoint = format!("projects/{enc}/pipelines/{pipeline_id}/jobs?per_page=100");
-    let jobs: Vec<GlabJob> = run_glab(Some(repo_path), &["api", &endpoint], GLAB_NETWORK_TIMEOUT)
-        .await
-        .ok()
-        .and_then(|o| serde_json::from_str::<Vec<GlabJob>>(&o.stdout_lossy()).ok())
-        .unwrap_or_default();
-    let run_id = pipeline_id.to_string();
-    jobs.into_iter()
+/// Read checks from the pipeline's owning project. Read failures, including denied
+/// cross-project access, leave the view's checks unknown. Cross-project checks link
+/// out without run/job ids because log, detail and retry routes use the target project.
+/// Same-project ids are stringified to preserve JS precision.
+async fn pipeline_checks(
+    repo_path: &str,
+    enc: &str,
+    pipeline_id: u64,
+    cross_project_id: Option<u64>,
+) -> AppResult<Vec<PrCheckOut>> {
+    let cross_project = cross_project_id.map(|id| id.to_string());
+    let project = cross_project.as_deref().unwrap_or(enc);
+    let endpoint = format!("projects/{project}/pipelines/{pipeline_id}/jobs?per_page=100");
+    let out = run_glab(Some(repo_path), &["api", &endpoint], GLAB_NETWORK_TIMEOUT).await?;
+    pipeline_checks_from(&out.stdout_lossy(), pipeline_id, cross_project_id.is_some())
+}
+
+fn pipeline_checks_from(
+    body: &str,
+    pipeline_id: u64,
+    cross_project: bool,
+) -> AppResult<Vec<PrCheckOut>> {
+    let jobs = pipeline_jobs_from(body)?;
+    let run_id = (!cross_project).then(|| pipeline_id.to_string());
+    Ok(jobs.into_iter()
         .map(|j| PrCheckOut {
             name: j.name,
             status: map_job_check_status(&j.status),
             details_url: Some(j.web_url).filter(|u| !u.is_empty()),
-            run_id: Some(run_id.clone()),
-            job_id: Some(j.id.to_string()),
+            run_id: run_id.clone(),
+            job_id: (!cross_project).then(|| j.id.to_string()),
             started_at: Some(j.started_at).filter(|s| !s.is_empty()),
             completed_at: Some(j.finished_at).filter(|s| !s.is_empty()),
         })
-        .collect()
+        .collect())
 }
 
 /// GitLab's pipeline `source` → a short label for the run's "workflow" slot
@@ -12413,6 +12434,35 @@ mod tests {
         assert_eq!(m.detail, None);
     }
 
+    #[test]
+    fn mr_changes_head_pipeline_selects_only_a_known_different_project() {
+        let base = r#""iid": 6, "web_url": "u", "title": "t", "target_branch": "main",
+            "source_branch": "feat", "state": "opened", "source_project_id": 2"#;
+        for (fields, expected) in [
+            (
+                r#""head_pipeline":{"id":42,"project_id":2},"target_project_id":1"#,
+                Some(2),
+            ),
+            (
+                r#""head_pipeline":{"id":42,"project_id":1},"target_project_id":1"#,
+                None,
+            ),
+            (
+                r#""head_pipeline":{"id":42,"project_id":null},"target_project_id":1"#,
+                None,
+            ),
+            (r#""head_pipeline":{"id":42,"project_id":2}"#, None),
+        ] {
+            let mr: GlabMrChanges =
+                serde_json::from_str(&format!("{{ {base}, {fields} }}")).unwrap();
+            assert_eq!(
+                mr.head_pipeline.unwrap().cross_project_id(mr.target_project_id),
+                expected,
+                "{fields}"
+            );
+        }
+    }
+
     /// The `/changes` payload the MR view already fetches carries the conflict and
     /// project-id fields, so the detail view costs no extra HTTP.
     #[test]
@@ -12832,6 +12882,39 @@ mod tests {
         let jobs =
             pipeline_jobs_from(r#"[{"id":7,"status":"failed","name":"test"}]"#).unwrap();
         assert_eq!((jobs[0].id, jobs[0].status.as_str()), (7, "failed"));
+    }
+
+    #[test]
+    fn pipeline_checks_body_preserves_failed_and_empty_reads() {
+        for body in ["", "<html>502 Bad Gateway</html>", r#"{"message":"404 Not found"}"#] {
+            assert!(pipeline_checks_from(body, 42, false).is_err(), "{body}");
+        }
+        assert!(pipeline_checks_from("[]", 42, false).unwrap().is_empty());
+        let checks =
+            pipeline_checks_from(r#"[{"id":7,"status":"failed","name":"test"}]"#, 42, false)
+                .unwrap();
+        assert_eq!(checks[0].name, "test");
+        assert_eq!(checks[0].status, "FAILURE");
+        assert_eq!(checks[0].run_id.as_deref(), Some("42"));
+        assert_eq!(checks[0].job_id.as_deref(), Some("7"));
+    }
+
+    #[test]
+    fn pipeline_checks_from_cross_project_preserves_link_without_action_ids() {
+        let checks = pipeline_checks_from(
+            r#"[{"id":7,"status":"failed","name":"test",
+                 "web_url":"https://gitlab.com/fork/repo/-/jobs/7"}]"#,
+            42,
+            true,
+        )
+        .unwrap();
+        assert_eq!(checks[0].status, "FAILURE");
+        assert!(checks[0].run_id.is_none());
+        assert!(checks[0].job_id.is_none());
+        assert_eq!(
+            checks[0].details_url.as_deref(),
+            Some("https://gitlab.com/fork/repo/-/jobs/7")
+        );
     }
 
     #[test]

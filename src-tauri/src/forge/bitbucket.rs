@@ -45,9 +45,9 @@ use crate::forge::{
 use crate::forge::Forge;
 use crate::github::actions::{CiRunPage, RunDetail, RunJob, WorkflowRun};
 use crate::github::pr::{
-    ApprovalState, CommitCommentOut, DraftCommentIn, PrAuthor, PrCiRefIn, PrCiStatus, PrCommitOut,
-    PrDetails, PrFileOut, PrHeadRef, PrInfo, PrListLabel, PrMergeability, PrPollInfo, PrRef,
-    PrThreadOut, ReviewSubmitOut, ReviewThreadOut,
+    checks_or_unknown, ApprovalState, CommitCommentOut, DraftCommentIn, PrAuthor, PrCiRefIn,
+    PrCiStatus, PrCommitOut, PrDetails, PrFileOut, PrHeadRef, PrInfo, PrListLabel,
+    PrMergeability, PrPollInfo, PrRef, PrThreadOut, ReviewSubmitOut, ReviewThreadOut,
 };
 
 /// Whether this process has SUCCESSFULLY seeded git's credential store this session
@@ -1007,6 +1007,14 @@ struct BbPr {
     created_on: String,
 }
 
+fn view_head_sha(pr: &BbPr) -> &str {
+    pr.source
+        .as_ref()
+        .and_then(|s| s.commit.as_ref())
+        .map(|c| c.hash.as_str())
+        .unwrap_or_default()
+}
+
 /// Best display login for a Bitbucket user: display_name else nickname (other users
 /// carry no username — only the authenticated self does).
 fn user_login(u: &BbUser) -> String {
@@ -1635,22 +1643,20 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
         })
         .unwrap_or_default();
 
-    // Statuses → checks. Scoped to the HEAD commit's statuses (the last commit after
-    // the oldest-first reversal above), matching what the PR view shows — a plain
-    // `pullrequests/{id}/statuses` mixes in statuses for superseded commits. External
-    // build statuses link out via `url`; they carry no run/job id, so the frontend
-    // renders link-out only (no inline log peek). Best-effort: empty on any failure.
-    let head_sha = commits.last().map(|c| c.oid.clone()).unwrap_or_default();
-    let checks = if head_sha.is_empty() {
-        Vec::new()
+    // The core PR's head scopes checks independently of the best-effort commits
+    // fetch; `pullrequests/{id}/statuses` includes superseded commits. Missing head
+    // or failed statuses leave checks unknown without failing the view.
+    let head_sha = view_head_sha(&pr);
+    let (checks, checks_unknown) = if head_sha.is_empty() {
+        (Vec::new(), true)
     } else {
-        http::bb_get_json::<BbPage<BbCommitStatus>>(
+        let checks = http::bb_get_json::<BbPage<BbCommitStatus>>(
             &creds,
             &format!(
                 "repositories/{}/{}/commit/{}/statuses?pagelen=100",
                 encode_query_value(&ws),
                 encode_query_value(&slug),
-                encode_query_value(&head_sha),
+                encode_query_value(head_sha),
             ),
             "statuses",
             BbOpKind::Read,
@@ -1670,8 +1676,8 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
                     completed_at: s.updated_on.filter(|t| !t.is_empty()),
                 })
                 .collect()
-        })
-        .unwrap_or_default()
+        });
+        checks_or_unknown(checks)
     };
 
     // Completed reviewers = participants who acted, derived from participant state
@@ -1731,6 +1737,7 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
         stack_members: Vec::new(),
         stack_unknown: false,
         members_unknown: false,
+        checks_unknown,
         // Bitbucket Cloud's PR payload carries no mergeability field, and its only
         // pre-check needs a write scope — so "unknown", never a guess.
         mergeability: PrMergeability::unavailable(),
@@ -6579,6 +6586,18 @@ mod tests {
         // Undated first, then the true chronological order — the reverse of the
         // strings for the dated pair.
         assert_eq!(dates, vec!["", utc_late, local_evening]);
+    }
+
+    #[test]
+    fn view_head_sha_reads_the_core_pr_or_stays_unavailable() {
+        for (body, expected) in [
+            (r#"{"source":{"commit":{"hash":"abc123def456"}}}"#, "abc123def456"),
+            (r#"{"source":{"commit":null}}"#, ""),
+            ("{}", ""),
+        ] {
+            let pr: BbPr = serde_json::from_str(body).unwrap();
+            assert_eq!(view_head_sha(&pr), expected, "{body}");
+        }
     }
 
     #[test]

@@ -4145,6 +4145,13 @@ pub struct PrDetails {
     /// is a missing list, not a one-PR stack. GitHub only: GitLab derives members
     /// from the same rows as membership, and Bitbucket has no stacks.
     pub members_unknown: bool,
+    /// The checks read FAILED, so an empty `checks` is a missing list, not a no-checks
+    /// state. `checks_unknown == true` implies `checks` is empty. GitLab: true on a
+    /// failed jobs read, false for no pipeline or a successful read. Bitbucket: true
+    /// on a failed statuses fetch/parse or an unavailable head sha, false on success.
+    /// GitHub: always false — checks arrive in the same `gh pr view` call as the view
+    /// itself; a failed call fails the whole view, so a rendered view's checks were read.
+    pub checks_unknown: bool,
     /// Whether the PR can merge right now, per the SERVER — never inferred locally.
     /// Bitbucket reports `"unavailable"` (its PR shape has no such field).
     pub mergeability: PrMergeability,
@@ -4155,6 +4162,14 @@ pub struct PrDetails {
     /// ("allow edits by maintainers"). GitHub only — `None` means unknown
     /// (GitLab/Bitbucket, or a projection that didn't carry it), never "no".
     pub maintainer_can_modify: Option<bool>,
+}
+
+/// Unknown checks are always empty; successful reads, including empty ones, are known.
+pub(crate) fn checks_or_unknown<E>(read: Result<Vec<PrCheckOut>, E>) -> (Vec<PrCheckOut>, bool) {
+    match read {
+        Ok(checks) => (checks, false),
+        Err(_) => (Vec::new(), true),
+    }
 }
 
 /// A merge/pull request's approval summary — who has approved and whether the
@@ -4806,6 +4821,7 @@ pub async fn gh_pr_view(
         stack_members,
         stack_unknown,
         members_unknown,
+        checks_unknown: false,
         mergeability,
         cross_repository: raw.is_cross_repository,
         maintainer_can_modify: raw.maintainer_can_modify,
@@ -6892,7 +6908,7 @@ fn scrape_pr_ref(stdout: &str) -> (u64, String) {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_stack_join, classify_gh_merge_refusal, classify_merge_async,
+        apply_stack_join, checks_or_unknown, classify_gh_merge_refusal, classify_merge_async,
         external_items_from_thread_nodes, fallback_auth_outcome,
         flatten_slurped_pages, fork_head_identity, gh_api_error_message,
         gh_pr_discard_pending_review, gh_repo_url, host_from_url, is_canonical_github_remote,
@@ -6909,7 +6925,7 @@ mod tests {
         PR_LIST_FIELDS, PR_VIEW_FIELDS, PRS_FOR_BRANCH_FIELDS, upstream_pulls_endpoint, GhPrFile,
         GhPrRestComment,
         GhPrRestCommit, GhPrRestCommitGitAuthor, GhPrRestCommitInner, GhPrRestPull, GhPrRestReview,
-        GhStackEntry, MergeAsyncOutcome, MergeAsyncStatus, PrDetails, PrInfo, PrMergeOutcome,
+        GhStackEntry, MergeAsyncOutcome, MergeAsyncStatus, PrCheckOut, PrDetails, PrInfo, PrMergeOutcome,
         GhMergeabilityRow, PrMergeability, PrPollInfo, PrStackInfo, PrStackMember,
         ForgeTimelineEventOut,
         batch_check_present, build_divergence_compare_path, oid_outside_origin_graph,
@@ -7123,6 +7139,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn checks_or_unknown_preserves_successful_reads() {
+        let check = PrCheckOut {
+            name: "build".to_string(),
+            status: "SUCCESS".to_string(),
+            ..Default::default()
+        };
+        let (checks, unknown) = checks_or_unknown::<()>(Ok(vec![check]));
+        assert!(!unknown);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "build");
+        assert_eq!(checks[0].status, "SUCCESS");
+
+        let (checks, unknown) = checks_or_unknown::<()>(Ok(Vec::new()));
+        assert!(checks.is_empty());
+        assert!(!unknown);
+    }
+
+    #[test]
+    fn checks_or_unknown_marks_failed_reads() {
+        let (checks, unknown) = checks_or_unknown(Err("checks unavailable"));
+        assert!(checks.is_empty());
+        assert!(unknown);
+    }
+
     /// A `PrDetails` with everything empty but the stack fields — the wire shape
     /// is what these tests pin, not the payload.
     fn details_with_stack(
@@ -7161,6 +7202,7 @@ mod tests {
             stack_members,
             stack_unknown,
             members_unknown,
+            checks_unknown: false,
             mergeability: PrMergeability::unavailable(),
             cross_repository: false,
             maintainer_can_modify: None,
@@ -7204,6 +7246,8 @@ mod tests {
         assert!(v.get("stack_unknown").is_none());
         assert_eq!(v["membersUnknown"], false);
         assert!(v.get("members_unknown").is_none());
+        assert_eq!(v["checksUnknown"], false);
+        assert!(v.get("checks_unknown").is_none());
 
         // Unstacked: an explicit null plus an empty array, never a missing key.
         let v =
@@ -7228,6 +7272,13 @@ mod tests {
         assert_eq!(v["stackMembers"], serde_json::json!([]));
         assert_eq!(v["stackUnknown"], false);
         assert_eq!(v["membersUnknown"], true);
+
+        let mut details = details_with_stack(None, Vec::new(), false, false);
+        details.checks_unknown = true;
+        let v = serde_json::to_value(&details).unwrap();
+        assert_eq!(v["checks"], serde_json::json!([]));
+        assert_eq!(v["checksUnknown"], true);
+        assert!(v.get("checks_unknown").is_none());
     }
 
     #[test]
