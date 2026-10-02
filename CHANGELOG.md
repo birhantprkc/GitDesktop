@@ -12,6 +12,120 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-10-02
+
+### Fixed
+
+- Bitbucket pull requests with more than 100 changed files now list files
+  past the first 100 (up to 500, and the view says when more remain).
+- Keyboard focus survives inline confirmations in repository settings: opening
+  one lands on Cancel, and cancelling it returns focus to the control you came
+  from.
+- The conflict banner shown during a merge, rebase, cherry-pick, or revert
+  stays readable in a narrow sidebar: the status text shortens to fit, with
+  the full text on hover.
+- Repository settings and security-findings actions stay available through a
+  brief connection drop, and the sign-in check and GitHub Pages settings say
+  when GitHub couldn't be reached.
+- Pull-request views keep what they could load and say so: comments, commits,
+  checks, and review verdicts that couldn't be fully read are marked as
+  partial, and pipeline logs say when only the newest jobs were checked.
+- GitLab errors show the real reason, and connection problems say so plainly.
+- Merge requests from GitLab forks list their pipeline checks, with each check
+  linking to its job on GitLab.
+- GitLab members: the owner of a personal project is marked "Owner", and its
+  Remove button explains that the owner can't be removed. The Add button and
+  each member's role picker also say why they're unavailable while disabled,
+  and loaded members stay listed when a refresh fails (with a Retry) or waits
+  for a connection.
+- GitLab and Bitbucket run details report fetch failures. Failed-job logs keep
+  available output, label unavailable logs, show an error if every fetch fails,
+  and count failed jobs or steps omitted at the output limit.
+- Held switches in repository settings now tell keyboard and screen-reader
+  users why they can't be changed (offline, saving, inherited, or waiting on
+  another setting), stay reachable by Tab, and per-row switches and role
+  pickers announce which row they belong to.
+- Error messages that mention a hostname like gitlab-429.example.com now get
+  the clear couldn't-reach message when the network is the problem.
+- Projects boards, My work, Actions, Run workflow, fork comparisons, project
+  fields and Jira issues now say when they're waiting for a connection and
+  keep what they already loaded, offering Retry only for a refresh that
+  actually failed. Reconnecting refreshes them quietly, and Jira's status,
+  priority and label menus keep their options through a failed refresh.
+- Controls explain why they're waiting: Refresh runs says it's already
+  loading, and a project board's Group by, date and saved-view choices plus
+  the reviewer, assignee, milestone, label and Jira issue-type pickers say
+  when they're waiting for a connection or couldn't load, calling a list
+  empty only once it has loaded.
+- Account status distinguishes account names and hostnames from connection
+  outages.
+- Sign-in and outage states read correctly on self-hosted GitLab and GitHub
+  Enterprise hosts, when a GitLab host name, port, or project URL contains 429,
+  and when a Bitbucket or Jira response stalls or drops partway through.
+- A pull request check's log tail stays readable through a failed refresh,
+  with a short note and a Retry, and Discussions keep what's on screen while
+  a reconnect refreshes them. Pressing Retry in Discussions, the pull request
+  and issue lists, Actions, and the Run workflow and Create Jira issue
+  dialogs keeps keyboard focus in place.
+- A pull request check's log offers a Retry, with the reason it couldn't
+  load, even before any text has arrived. The Actions run list now says
+  when a refresh failed or you're offline, with a Retry for a failed
+  refresh. The Jira assignee search says when it's waiting for a
+  connection, and a stack's Dissolve action explains when you need write
+  access to use it.
+- Pull-request file and review-discussion lists that couldn't be fully loaded
+  are now marked as partial, with a retry where one helps, and AI reviews note
+  a partial commit list in their prompt.
+- GitLab pipeline views now list jobs beyond the first hundred: the merge
+  request checks rollup, the run details view, and failed-job logs.
+- GitLab merge requests and Bitbucket pull requests now say when their CI checks
+  couldn't be loaded and offer Retry (or say they will load once you're back
+  online).
+- GitLab merge requests and Bitbucket pull requests say when their
+  conversation couldn't be loaded and offer Retry (or say it will load once
+  you're back online).
+- Blame, file previews, and AI reviews on pull requests with very long commit
+  histories now anchor to the pull request's true head commit, so reviews read
+  the latest code and a head that was already covered is never re-reviewed.
+- Pressing Retry on a project board that couldn't load, or in the board's
+  Edit fields dialog, keeps keyboard focus in place, and that dialog says
+  when its fields are waiting for a connection.
+- Opening a ruleset for editing while offline says so and loads once you're
+  back; an already-open ruleset keeps the loaded version and your draft under
+  a notice when a refresh fails.
+- Deleting a row in repository settings now moves keyboard focus to a
+  neighboring row's control, or to the section's add field or button once
+  the list is empty, and a confirm button keeps focus while its action
+  applies, including when it fails.
+- In-progress edits in Repository settings (General, Security, Pages, and
+  Sponsor) survive background refreshes and connection blips: a failed refresh
+  keeps the form and your draft on screen with a note and a Retry, and a first
+  load that fails can be retried in place.
+- Repository settings lists keep their loaded rows on screen when a refresh
+  fails (with a short note and a Retry) or waits for a connection: webhooks,
+  collaborators, rulesets, secrets and variables, and the GitLab and
+  Bitbucket list sections. A list opened offline says it will load once you're
+  back online, and a failed load names the permission it may need.
+- While you're offline, Repository settings tells you what's waiting: the
+  General, Security, and Pages forms say they'll load once you're back online,
+  and actions that need a connection (adding webhooks, variables, secrets,
+  members, and rules) say why they're unavailable and come back on their own
+  when you reconnect. The Repository settings menu item also shows while your
+  access is being checked.
+- Repository settings actions that write to GitHub, GitLab, or Bitbucket say
+  when you're offline: saves, deletes, role changes, toggles, webhook tests
+  and redeliveries, and danger-zone actions all explain themselves and come
+  back the moment the connection does.
+- Sign-in and outage states stay accurate for hosts whose names carry digits
+  or network words, like gitlab-429 or proxy.example.com.
+- A stacked pull request's Stack section now tells a failed member lookup apart
+  from a stack with nothing else in it: a lookup that failed says so and offers
+  Retry (or says it will load once you're back online).
+- A pull request's timeline events and a workflow run's logs stay on screen
+  when a refresh fails or you're offline, with a short note and a Retry when
+  the refresh failed. Timeline events or logs that haven't loaded yet say
+  they're waiting for a connection.
+
 ## [0.13.1] - 2026-09-30
 
 ### Changed
@@ -4462,7 +4576,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.13.1...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.13.2...HEAD
+[0.13.2]: https://github.com/theBGuy/GitDesktop/compare/v0.13.1...v0.13.2
 [0.13.1]: https://github.com/theBGuy/GitDesktop/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/theBGuy/GitDesktop/compare/v0.12.2...v0.13.0
 [0.12.2]: https://github.com/theBGuy/GitDesktop/compare/v0.12.1...v0.12.2

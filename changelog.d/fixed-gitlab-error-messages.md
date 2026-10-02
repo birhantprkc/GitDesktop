@@ -1,1 +1,0 @@
-- GitLab errors show the real reason, and connection problems say so plainly.
