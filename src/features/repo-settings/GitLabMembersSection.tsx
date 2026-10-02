@@ -31,6 +31,7 @@ import {
   InlineConfirm,
   OFFLINE_WRITE_REASON,
   RemoteListSection,
+  SAVING_REASON,
 } from "./parts";
 
 /** The roles the app offers (the classic five — Planner is newer and not
@@ -53,8 +54,6 @@ function roleLabel(level: number): string {
   if (level === 15) return "Planner";
   return ROLES.find((r) => r.value === level)?.label ?? `Level ${level}`;
 }
-
-const SAVING_REASON = "Saving your last change…";
 
 function validUsername(u: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(u);
@@ -98,7 +97,9 @@ export function GitLabMembersSection({
         return undefined;
     }
   })();
-  const roleHeld = update.isPending ? SAVING_REASON : undefined;
+  const offlineReason = online ? undefined : OFFLINE_WRITE_REASON;
+  const roleHeld =
+    offlineReason ?? (update.isPending ? SAVING_REASON : undefined);
 
   const memberRows = members.data ?? [];
   // GitLab namespace paths are unique across users AND groups, so a username
@@ -232,6 +233,7 @@ export function GitLabMembersSection({
                 onRole={(accessLevel) => handleRole(m, accessLevel)}
                 confirming={confirming === m.id}
                 pending={remove.isPending}
+                confirmHeld={offlineReason}
                 onConfirm={() => setConfirming(m.id)}
                 onCancel={() => setConfirming(null)}
                 onRemove={() => handleRemove(m)}
@@ -258,6 +260,7 @@ function MemberRow({
   onRole,
   confirming,
   pending,
+  confirmHeld,
   onConfirm,
   onCancel,
   onRemove,
@@ -273,6 +276,8 @@ function MemberRow({
   onRole: (level: number) => void;
   confirming: boolean;
   pending: boolean;
+  /** Why the confirm's Remove is held. */
+  confirmHeld?: string;
   onConfirm: () => void;
   onCancel: () => void;
   onRemove: () => void;
@@ -313,6 +318,7 @@ function MemberRow({
           prompt="Remove?"
           actLabel="Remove"
           pending={pending}
+          heldReason={confirmHeld}
           onCancel={onCancel}
           onAct={onRemove}
         />

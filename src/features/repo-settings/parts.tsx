@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode, type Ref, useMemo, useState } from "react";
 import { CopyIconButton } from "@/components/CopyIconButton";
+import { DisabledReasonButton } from "@/components/disabled-reason-button";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -96,6 +97,9 @@ export function AsyncErrorCard({
  *  offline: a mutation pressed then parks silently and fires on reconnect. */
 export const OFFLINE_WRITE_REASON =
   "You're offline — this will be available once you're back online.";
+
+/** The hold reason while a row's last change is still saving. */
+export const SAVING_REASON = "Saving your last change…";
 
 /** What a {@link RemoteFormSection} with loaded fields says over them. */
 function formNoticeMessage(noun: string, failed: boolean): string {
@@ -362,9 +366,9 @@ export function RemoteListSection({
 }
 
 /**
- * A row's role picker, held with a reason while a change saves or the roles
- * are unknown. Labels come from `items` (Base UI's value → label map) or, for
- * a value outside the offered roles, an explicit `valueLabel`.
+ * A row's picker (a role, a ruleset's enforcement), held with a reason while
+ * saving, offline, or with its options unknown. Labels come from `items` or,
+ * for a value outside the offered options, an explicit `valueLabel`.
  */
 export function HeldRoleSelect({
   value,
@@ -373,15 +377,18 @@ export function HeldRoleSelect({
   options,
   items,
   valueLabel,
+  label = "Role",
 }: {
   value: string;
   /** Why the picker is held, as its hover text and accessible description. */
   heldReason?: string;
   onRole: (value: string) => void;
-  /** The roles offered, in order. */
+  /** The options offered, in order. */
   options: readonly { value: string; label: string }[];
   items?: Record<string, string>;
   valueLabel?: ReactNode;
+  /** The trigger's accessible name. */
+  label?: string;
 }) {
   const held = heldReason !== undefined;
   const reason = useDisabledReason({ disabled: held, reason: heldReason });
@@ -410,7 +417,7 @@ export function HeldRoleSelect({
         <SelectTrigger
           size="sm"
           className={cn("w-28", ARIA_DISABLED_CLASS)}
-          aria-label="Role"
+          aria-label={label}
           aria-disabled={held || undefined}
           aria-describedby={reason.describedBy}
         >
@@ -511,6 +518,7 @@ export function InlineConfirm({
   actLabel,
   actVariant = "destructive",
   pending = false,
+  heldReason,
   onCancel,
   onAct,
 }: {
@@ -522,6 +530,9 @@ export function InlineConfirm({
   actLabel: ReactNode;
   actVariant?: "destructive" | "default";
   pending?: boolean;
+  /** Why the act button is held, as its hover text and accessible description.
+   *  Unset leaves it held only while `pending`. */
+  heldReason?: string;
   onCancel: () => void;
   onAct: () => void;
 }) {
@@ -535,10 +546,18 @@ export function InlineConfirm({
       <Button size="sm" variant={cancelVariant} onClick={onCancel}>
         {cancelLabel}
       </Button>
-      <Button size="sm" variant={actVariant} disabled={pending} onClick={onAct}>
+      {/* One node whether or not a reason holds it, so a focused act button
+          survives the reason coming and going. */}
+      <DisabledReasonButton
+        size="sm"
+        variant={actVariant}
+        disabled={pending || heldReason !== undefined}
+        reason={heldReason}
+        onClick={onAct}
+      >
         {pending && <Spinner data-icon="inline-start" />}
         {actLabel}
-      </Button>
+      </DisabledReasonButton>
     </>
   );
 }

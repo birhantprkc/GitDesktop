@@ -23,6 +23,7 @@ import {
   InlineConfirm,
   OFFLINE_WRITE_REASON,
   RemoteListSection,
+  SAVING_REASON,
 } from "./parts";
 
 /** Bitbucket default reviewers: the accounts auto-added to every new pull
@@ -38,6 +39,7 @@ export function BitbucketDefaultReviewersSection({
   const reviewers = useBbDefaultReviewers(repoPath, open);
   const add = useBbAddDefaultReviewer(repoPath);
   const remove = useBbRemoveDefaultReviewer(repoPath);
+  const online = useOnline();
 
   const [confirming, setConfirming] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -113,6 +115,7 @@ export function BitbucketDefaultReviewersSection({
               onFocus={() => setActiveIndex(i)}
               confirming={confirming === r.id}
               pending={remove.isPending}
+              confirmHeld={online ? undefined : OFFLINE_WRITE_REASON}
               onConfirm={() => setConfirming(r.id)}
               onCancel={() => setConfirming(null)}
               onRemove={() => handleRemove(r)}
@@ -131,6 +134,7 @@ function ReviewerRow({
   onFocus,
   confirming,
   pending,
+  confirmHeld,
   onConfirm,
   onCancel,
   onRemove,
@@ -141,6 +145,8 @@ function ReviewerRow({
   onFocus: () => void;
   confirming: boolean;
   pending: boolean;
+  /** Why the confirm's Remove is held. */
+  confirmHeld?: string;
   onConfirm: () => void;
   onCancel: () => void;
   onRemove: () => void;
@@ -172,6 +178,7 @@ function ReviewerRow({
           prompt="Remove?"
           actLabel="Remove"
           pending={pending}
+          heldReason={confirmHeld}
           onCancel={onCancel}
           onAct={onRemove}
         />
@@ -208,7 +215,7 @@ function AddReviewerPopover({
   const heldReason = !online
     ? OFFLINE_WRITE_REASON
     : pending
-      ? "Saving your last change…"
+      ? SAVING_REASON
       : undefined;
   // A pick made offline would park silently, so a picker open when the
   // connection drops closes with its trigger held. Reset, not derived into
