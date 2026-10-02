@@ -307,15 +307,46 @@ export interface PrDetails {
   reviews: PrThreadOut[];
   comments: PrThreadOut[];
   checks: PrCheckOut[];
-  /** True when the checks read FAILED, so an empty `checks` is a missing list,
-   *  not a PR without checks (`true` implies `checks` is empty). GitLab and
-   *  Bitbucket only; GitHub reads its checks in the same call as the PR itself,
-   *  so it always reports false. */
+  /** True when the checks read failed or may be incomplete — never present
+   *  `checks` as complete. A partial list may be retained; an empty one is a
+   *  missing list, not a PR without checks. GitLab and Bitbucket only; GitHub
+   *  reads its checks in the same call as the PR itself, so always false. */
   checksUnknown: boolean;
-  /** True when the forge's comments read FAILED: `comments` holds no server
-   *  comments, though a local optimistic append may transiently appear. GitLab
-   *  and Bitbucket only; GitHub reads them with the PR itself, so always false. */
+  /** True when the checks read succeeded but hit a pagination cap, so `checks`
+   *  may be partial (an exact-cap list can be complete); a refetch returns the
+   *  same list. Implies `checksUnknown`; a failed read is unknown but never
+   *  truncated. GitHub: always false. */
+  checksTruncated: boolean;
+  /** True when the comments read failed or may be incomplete — never
+   *  present `comments` as complete. A partial list may be retained, and a local
+   *  optimistic append may transiently appear. GitLab and Bitbucket: a failed or
+   *  capped read. GitHub: a failed REST top-up past 100 comments, which keeps
+   *  the GraphQL rows. */
   commentsUnknown: boolean;
+  /** True when the comments read succeeded but hit a pagination cap, so
+   *  `comments` may be partial (an exact-cap list can be complete, and filtering
+   *  can leave it empty); a refetch returns the same list. Implies
+   *  `commentsUnknown`; a failed read is unknown but never truncated.
+   *  GitHub: always false. */
+  commentsTruncated: boolean;
+  /** True when the commits read failed or may be incomplete — never present
+   *  `commits` as complete. A partial list may be retained. GitLab and
+   *  Bitbucket: a failed or capped read. GitHub: a failed REST top-up past 100
+   *  commits (the GraphQL rows are kept) or the 250-commit REST ceiling. */
+  commitsUnknown: boolean;
+  /** True when the commits read succeeded but hit a pagination cap, so `commits`
+   *  may be partial (an exact-cap list can be complete); a refetch returns the
+   *  same list. Implies `commitsUnknown`; a failed read is unknown but never
+   *  truncated. GitHub: set at the 250-commit REST ceiling. */
+  commitsTruncated: boolean;
+  /** True when the reviewer-verdict read failed or may be incomplete — never
+   *  present reviewer verdicts (`completedReviewers`, or on GitHub the chips
+   *  derived from `reviews`) as complete, nor an assigned reviewer without a
+   *  verdict as pending. `reviewers` itself stays complete. GitLab: a failed
+   *  verdict read; false with no assigned reviewers. GitHub: a failed reviews
+   *  top-up, leaving `reviews` with only the 100 GraphQL rows. Bitbucket: always
+   *  false. */
+  reviewersUnknown: boolean;
   labels: RepoLabel[];
   /** Assignees. GitHub and GitLab both fill this (the MR/PR-assignees picker is
    *  wired for both, `implemented.mrAssignees`); Bitbucket leaves it empty. Each

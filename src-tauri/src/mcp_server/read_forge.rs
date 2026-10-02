@@ -173,10 +173,15 @@ impl GitDesktopMcp {
                        MRs and each MR merges on its own. When `stack` is null AND `stackUnknown` \
                        is true, the stack status could NOT be checked — that is not a guarantee \
                        the PR is unstacked, so verify on GitHub before merging it. `checksUnknown` \
-                       means the checks could not be read and an empty `checks` is a missing list. \
-                       `commentsUnknown` means the comments could not be read and an empty \
-                       `comments` is a missing list. For just the conversation — including \
-                       file:line review threads — see list_pull_request_comments. Returns JSON."
+                       means the checks read failed or may be incomplete; partial checks \
+                       may remain. `commentsUnknown` and `commitsUnknown` mean those reads failed \
+                       or may be incomplete; retained lists must not be treated as complete. \
+                       `commentsTruncated`, `commitsTruncated` and `checksTruncated` mean \
+                       the list may be partial and retrying returns the same list. \
+                       `reviewersUnknown` means reviewer verdicts could not be fully read \
+                       (on GitHub, the `reviews` summaries may then be partial); the assigned \
+                       reviewers list stays complete. For just the conversation, including \
+                       file:line review threads, see list_pull_request_comments. Returns JSON."
     )]
     async fn get_pull_request(
         &self,
@@ -210,8 +215,12 @@ impl GitDesktopMcp {
                        author, date, and the original markdown body. Each thread's `diffHunk` \
                        code-context excerpt (GitHub only) is capped to its last few lines; set \
                        `include_diff_hunk` false to drop hunks entirely (default true). \
-                       `commentsUnknown` means the comments could not be read and an empty \
-                       `comments` is a missing list. Read-only; returns JSON. (For the PR's \
+                       `commentsUnknown` means the comments read failed or may be incomplete; \
+                       retained comments must not be treated as complete. `commentsTruncated` \
+                       means the list may be partial and retrying returns the same list. \
+                       `reviewersUnknown` means reviewer verdicts could not be fully read; \
+                       on GitHub, `reviews` may then be partial. \
+                       Read-only; returns JSON. (For the PR's \
                        metadata + changed files use get_pull_request; for its diff, \
                        pull_request_diff.)"
     )]
@@ -241,7 +250,9 @@ impl GitDesktopMcp {
             args.number,
             pr.comments,
             pr.comments_unknown,
+            pr.comments_truncated,
             pr.reviews,
+            pr.reviewers_unknown,
             review_threads,
         ))
     }
@@ -488,7 +499,8 @@ impl GitDesktopMcp {
 }
 
 /// The list_pull_request_comments payload. `commentsUnknown` rides beside `comments`
-/// so a failed comments read never reaches an agent as an empty conversation.
+/// so failed or potentially incomplete reads cannot be presented as complete.
+/// `reviewersUnknown` also flags incomplete reviewer verdicts and GitHub `reviews`.
 ///
 /// KEEP IN SYNC: src/lib/ai/review-tools.ts (`list_pull_request_comments`)
 /// mirrors this composed shape, the empty-field pruning below, and the tool's
@@ -497,14 +509,18 @@ fn comments_payload(
     number: u64,
     comments: Vec<crate::github::pr::PrThreadOut>,
     comments_unknown: bool,
+    comments_truncated: bool,
     reviews: Vec<crate::github::pr::PrThreadOut>,
+    reviewers_unknown: bool,
     review_threads: Vec<crate::github::pr::ReviewThreadOut>,
 ) -> serde_json::Value {
     let mut payload = serde_json::json!({
         "number": number,
         "comments": comments,
         "commentsUnknown": comments_unknown,
+        "commentsTruncated": comments_truncated,
         "reviews": reviews,
+        "reviewersUnknown": reviewers_unknown,
         "review_threads": review_threads,
     });
     // Prune always-default empty fields from every comment/thread object so
@@ -696,18 +712,31 @@ mod tests {
         assert_eq!(nc.get("id"), Some(&serde_json::json!("C1")));
     }
 
-    /// An empty `comments` is ambiguous on its own, so `commentsUnknown` is always
-    /// present, survives the prune, and carries the camelCase name get_pull_request uses.
+    /// `commentsUnknown`, `commentsTruncated`, and `reviewersUnknown` are always present,
+    /// survive pruning, and use the same camelCase names as get_pull_request.
     #[test]
-    fn comments_payload_carries_comments_unknown() {
-        let v = comments_payload(7, Vec::new(), true, Vec::new(), Vec::new());
-        assert_eq!(v["number"], 7);
-        assert_eq!(v["comments"], serde_json::json!([]));
-        assert_eq!(v["commentsUnknown"], true);
-        assert!(v.get("comments_unknown").is_none());
-
-        let v = comments_payload(7, Vec::new(), false, Vec::new(), Vec::new());
-        assert_eq!(v["comments"], serde_json::json!([]));
-        assert_eq!(v["commentsUnknown"], false);
+    fn comments_payload_carries_comment_and_reviewer_read_flags() {
+        // SYNTHETIC: comment and reviewer reads can succeed or fail independently.
+        for (unknown, truncated) in [(false, false), (true, false), (true, true)] {
+            for reviewers_unknown in [false, true] {
+                let v = comments_payload(
+                    7,
+                    Vec::new(),
+                    unknown,
+                    truncated,
+                    Vec::new(),
+                    reviewers_unknown,
+                    Vec::new(),
+                );
+                assert_eq!(v["number"], 7);
+                assert_eq!(v["comments"], serde_json::json!([]));
+                assert_eq!(v["commentsUnknown"], unknown);
+                assert_eq!(v["commentsTruncated"], truncated);
+                assert_eq!(v["reviewersUnknown"], reviewers_unknown);
+                assert!(v.get("comments_unknown").is_none());
+                assert!(v.get("comments_truncated").is_none());
+                assert!(v.get("reviewers_unknown").is_none());
+            }
+        }
     }
 }

@@ -187,6 +187,29 @@ export function reviewCommentsNotice(input: {
   }
 }
 
+/** The notice props for a PR sub-list whose read failed or may be partial,
+ *  keyed on the wire's `truncated` flag, never the shown row count (filtering can
+ *  empty a capped page; an optimistic append can fill a failed one). A truncated
+ *  read re-reads the same cap on refetch or reconnect, so it outranks offline and
+ *  offers no Retry; its copy says "may be" because some caps are length
+ *  heuristics (a list of exactly the cap can be complete). A failed read says so
+ *  beside any rows it shows (an optimistic append, or the GraphQL rows GitHub
+ *  keeps after a failed top-up); parked offline it resumes by itself, so it
+ *  offers no Retry. */
+export function unknownListNotice(opts: {
+  prNoun: string;
+  list: string;
+  truncated: boolean;
+  paused: boolean;
+  onRetry?: () => void;
+}): { message: string; onRetry?: () => void } {
+  const { prNoun, list, truncated, paused, onRetry } = opts;
+  if (truncated)
+    return { message: `This ${prNoun}'s ${list} may be incomplete.` };
+  if (paused) return { message: offlinePendingMessage(`the ${list}`) };
+  return { message: `Couldn't fully load this ${prNoun}'s ${list}.`, onRetry };
+}
+
 export type ListNoticeCause = "refresh" | "load-more" | "offline";
 
 /** The one line a list's notice shows, or null when healthy. A failing or

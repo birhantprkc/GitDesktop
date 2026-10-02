@@ -37,8 +37,8 @@ import {
 } from "@/features/actions/status";
 import { DegradedListNotice } from "@/features/conversations/ConversationListPanel";
 import {
-  offlinePendingMessage,
   sectionReadNotice,
+  unknownListNotice,
 } from "@/features/conversations/remote-section-state";
 import { clipTitle } from "@/lib/clip-title";
 import { presentError } from "@/lib/error-summary";
@@ -530,13 +530,15 @@ function RunDetailFetcher({
  * pipeline jobs) peek their log inline; external checks (Bitbucket build statuses,
  * etc.) link out. Auto-expanded when anything failed, or when a required check was
  * cancelled or went stale. With no checks it shows only a failed-read notice when
- * `checksUnknown` says the list is missing; a known-empty list renders no visible
- * DOM, just its headless completion watchers, which must survive an empty refetch
+ * `checksUnknown` says the list is missing, and over a `checksTruncated` list it
+ * says the checks may be incomplete. A known-empty list renders no visible DOM,
+ * just its headless completion watchers, which must survive an empty refetch
  * window.
  */
 export function ChecksRollup({
   checks,
   checksUnknown,
+  checksTruncated,
   detailsPaused,
   onRetryChecks,
   repoPath,
@@ -546,9 +548,14 @@ export function ChecksRollup({
   unmetRequiredContexts = [],
 }: {
   checks: PrCheckOut[];
-  /** The checks read failed, so an empty `checks` is a missing list, not a PR
+  /** The checks read failed or may be incomplete — never present `checks`
+   *  as complete. Empty and not truncated, it is a missing list, not a PR
    *  without checks. */
   checksUnknown: boolean;
+  /** The read succeeded but hit a pagination cap (implies `checksUnknown`): the
+   *  rows may be partial (an exact-cap list can be complete), and a refetch
+   *  returns the same list. */
+  checksTruncated: boolean;
   /** The details read is parked offline: its refetch resumes on reconnect, so
    *  the failed-read notice says so instead of offering Retry. */
   detailsPaused: boolean;
@@ -1094,6 +1101,13 @@ export function ChecksRollup({
   ].filter((s) => s.count > 0);
 
   const prNoun = provider === "gitlab" ? "merge request" : "pull request";
+  const notice = unknownListNotice({
+    prNoun,
+    list: "checks",
+    truncated: checksTruncated,
+    paused: detailsPaused,
+    onRetry: onRetryChecks,
+  });
   return (
     <>
       {watchers}
@@ -1102,12 +1116,8 @@ export function ChecksRollup({
       <DegradedListNotice
         noun="checks"
         degraded={checksUnknown}
-        message={
-          detailsPaused
-            ? offlinePendingMessage("the checks")
-            : `Couldn't load this ${prNoun}'s checks.`
-        }
-        onRetry={detailsPaused ? undefined : onRetryChecks}
+        message={notice.message}
+        onRetry={notice.onRetry}
         className="px-0 pb-0"
       />
       {checks.length === 0 ? null : (

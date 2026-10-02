@@ -45,9 +45,10 @@ use crate::forge::{
 use crate::forge::Forge;
 use crate::github::actions::{CiRunPage, RunDetail, RunJob, WorkflowRun};
 use crate::github::pr::{
-    checks_or_unknown, comments_or_unknown, ApprovalState, CommitCommentOut, DraftCommentIn,
-    PrAuthor, PrCiRefIn, PrCiStatus, PrCommitOut, PrDetails, PrFileOut, PrHeadRef, PrInfo,
-    PrListLabel, PrMergeability, PrPollInfo, PrRef, PrThreadOut, ReviewSubmitOut, ReviewThreadOut,
+    comments_or_unknown, read_or_unknown, ApprovalState, CommitCommentOut,
+    DraftCommentIn, PrAuthor, PrCiRefIn, PrCiStatus, PrCommitOut, PrDetails, PrFileOut,
+    PrHeadRef, PrInfo, PrListLabel, PrMergeability, PrPollInfo, PrRef, PrThreadOut,
+    ReviewSubmitOut, ReviewThreadOut,
 };
 
 /// Whether this process has SUCCESSFULLY seeded git's credential store this session
@@ -417,11 +418,9 @@ impl<T> Default for BbPage<T> {
     }
 }
 
-/// Page bound shared by every `next`-following read — a hard stop so a pathological
-/// repo can't stall a panel behind unbounded requests. This module's walkers drop
-/// pages past it silently: no error, no flag, so the caller can't tell.
-/// `bitbucket_findings::walk` is the exception — it returns a remaining `next`
-/// as its `truncated` verdict.
+/// Page bound shared by every next-following read. The shared walker reports a
+/// remaining next page at the cap; callers using the list-only wrapper and inline
+/// walkers may still discard that signal.
 pub(super) const BB_MAX_PAGES: usize = 5;
 
 /// The next page's URL, or `None` when there is no page to follow. Three cases stop
@@ -442,14 +441,28 @@ async fn bb_paginate<T: serde::de::DeserializeOwned>(
     first_url: String,
     what: &str,
 ) -> AppResult<Vec<T>> {
+    bb_paginate_with_truncation(creds, first_url, what)
+        .await
+        .map(|(rows, _)| rows)
+}
+
+async fn bb_paginate_with_truncation<T: serde::de::DeserializeOwned>(
+    creds: &BbCredentials,
+    first_url: String,
+    what: &str,
+) -> AppResult<(Vec<T>, bool)> {
     bb_walk_pages(first_url, |url| async move {
         http::bb_get_json::<BbPage<T>>(creds, &url, what, BbOpKind::Read).await
     })
     .await
 }
 
-/// The `next`-following walk behind [`bb_paginate`], over an injected page fetch.
-async fn bb_walk_pages<T, F, Fut>(first_url: String, mut fetch_page: F) -> AppResult<Vec<T>>
+/// Reports unread next pages at the cap or origin boundary exactly, unlike
+/// GitLab's full-page heuristic. Followed URLs stay within the authenticated origin.
+async fn bb_walk_pages<T, F, Fut>(
+    first_url: String,
+    mut fetch_page: F,
+) -> AppResult<(Vec<T>, bool)>
 where
     F: FnMut(String) -> Fut,
     Fut: std::future::Future<Output = AppResult<BbPage<T>>>,
@@ -459,12 +472,13 @@ where
     for _ in 0..BB_MAX_PAGES {
         let page = fetch_page(url).await?;
         out.extend(page.values);
+        let has_next = page.next.as_deref().is_some_and(|next| !next.is_empty());
         match next_page_url(page.next) {
             Some(next) => url = next,
-            None => break,
+            None => return Ok((out, has_next)),
         }
     }
-    Ok(out)
+    Ok((out, true))
 }
 
 // ── Repository listing (clone browser) ─────────────────────────────────────────
@@ -1450,6 +1464,28 @@ fn map_bb_check_state(state: &str) -> String {
     }
 }
 
+/// A non-empty next URL means this successful statuses read is incomplete.
+fn checks_from_status_page(
+    page: BbPage<BbCommitStatus>,
+) -> (Vec<crate::github::pr::PrCheckOut>, bool) {
+    let more = page.next.as_deref().is_some_and(|n| !n.is_empty());
+    let checks = page
+        .values
+        .into_iter()
+        .map(|s| crate::github::pr::PrCheckOut {
+            name: s.name.filter(|n| !n.is_empty()).unwrap_or(s.key),
+            status: map_bb_check_state(&s.state),
+            details_url: s.url.filter(|u| !u.is_empty()),
+            // External statuses have no Actions-style run/job id (link-out only).
+            run_id: None,
+            job_id: None,
+            started_at: s.created_on.filter(|t| !t.is_empty()),
+            completed_at: s.updated_on.filter(|t| !t.is_empty()),
+        })
+        .collect();
+    (checks, more)
+}
+
 /// Reduce a commit's build-status states (Bitbucket `state`: SUCCESSFUL/FAILED/
 /// INPROGRESS/STOPPED, plus any unknown) to one neutral list-row CI signal.
 /// Precedence: any FAILED → failing; else any INPROGRESS or unrecognized state →
@@ -1571,26 +1607,27 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
 
     // Commits — Bitbucket returns newest-first; the neutral model wants oldest-first
     // (the frontend treats the last as head), matching gitlab's reversal.
-    let mut commits: Vec<PrCommitOut> = http::bb_get_json::<BbPage<BbCommit>>(
-        &creds,
-        &format!("{base}/commits?pagelen=100"),
-        "commits",
-        BbOpKind::Read,
-    )
-    .await
-    .map(|page| {
-        page.values
-            .into_iter()
-            .map(|c| PrCommitOut {
-                headline: commit_headline(&c),
-                message_body: commit_body(&c),
-                author: commit_author(&c),
-                oid: c.hash,
-                date: c.date,
-            })
-            .collect()
-    })
-    .unwrap_or_default();
+    let (mut commits, commits_unknown, commits_truncated) = read_or_unknown(
+        bb_paginate_with_truncation::<BbCommit>(
+            &creds,
+            format!("{base}/commits?pagelen=100"),
+            "commits",
+        )
+        .await
+        .map(|(commits, more_pages)| {
+            let commits = commits
+                .into_iter()
+                .map(|c| PrCommitOut {
+                    headline: commit_headline(&c),
+                    message_body: commit_body(&c),
+                    author: commit_author(&c),
+                    oid: c.hash,
+                    date: c.date,
+                })
+                .collect();
+            (commits, more_pages)
+        }),
+    );
     commits.reverse();
 
     // Diffstat → files + additions/deletions totals.
@@ -1637,18 +1674,18 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
 
     // A failed walk leaves the view available with an explicitly unknown list;
     // `base` already carries the `/pullrequests/{number}` suffix.
-    let (comments, comments_unknown) = comments_or_unknown(
+    let (comments, comments_unknown, comments_truncated) = comments_or_unknown(
         fetch_all_pr_comments(&creds, &format!("{base}/comments"))
             .await
-            .map(|values| conversation_comments(values, &viewer_uuid)),
+            .map(|(values, more_pages)| (conversation_comments(values, &viewer_uuid), more_pages)),
     );
 
     // The core PR's head scopes checks independently of the best-effort commits
     // fetch; `pullrequests/{id}/statuses` includes superseded commits. Missing head
     // or failed statuses leave checks unknown without failing the view.
     let head_sha = view_head_sha(&pr);
-    let (checks, checks_unknown) = if head_sha.is_empty() {
-        (Vec::new(), true)
+    let (checks, checks_unknown, checks_truncated) = if head_sha.is_empty() {
+        (Vec::new(), true, false)
     } else {
         let checks = http::bb_get_json::<BbPage<BbCommitStatus>>(
             &creds,
@@ -1662,22 +1699,8 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
             BbOpKind::Read,
         )
         .await
-        .map(|page| {
-            page.values
-                .into_iter()
-                .map(|s| crate::github::pr::PrCheckOut {
-                    name: s.name.filter(|n| !n.is_empty()).unwrap_or(s.key),
-                    status: map_bb_check_state(&s.state),
-                    details_url: s.url.filter(|u| !u.is_empty()),
-                    // External statuses have no Actions-style run/job id (link-out only).
-                    run_id: None,
-                    job_id: None,
-                    started_at: s.created_on.filter(|t| !t.is_empty()),
-                    completed_at: s.updated_on.filter(|t| !t.is_empty()),
-                })
-                .collect()
-        });
-        checks_or_unknown(checks)
+        .map(checks_from_status_page);
+        read_or_unknown(checks)
     };
 
     // Completed reviewers = participants who acted, derived from participant state
@@ -1739,6 +1762,12 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
         members_unknown: false,
         checks_unknown,
         comments_unknown,
+        comments_truncated,
+        commits_truncated,
+        checks_truncated,
+        commits_unknown,
+        // Reviewer verdicts arrive in the core PR read on Bitbucket.
+        reviewers_unknown: false,
         // Bitbucket Cloud's PR payload carries no mergeability field, and its only
         // pre-check needs a write scope — so "unknown", never a guess.
         mergeability: PrMergeability::unavailable(),
@@ -2876,8 +2905,8 @@ fn group_bb_threads(comments: Vec<BbComment>, viewer_uuid: &str) -> Vec<ReviewTh
 async fn fetch_all_pr_comments(
     creds: &http::BbCredentials,
     comments_path: &str,
-) -> AppResult<Vec<BbComment>> {
-    bb_paginate(creds, format!("{comments_path}?pagelen=100"), "comments").await
+) -> AppResult<(Vec<BbComment>, bool)> {
+    bb_paginate_with_truncation(creds, format!("{comments_path}?pagelen=100"), "comments").await
 }
 
 /// File:line-anchored review threads on a PR — Bitbucket inline comments grouped with
@@ -2896,7 +2925,7 @@ pub async fn review_threads(repo_path: &str, number: u64) -> AppResult<Vec<Revie
         .unwrap_or_default();
 
     // `repo_base` has no `/pullrequests/{n}` suffix, so add it for the endpoint.
-    let comments =
+    let (comments, _more_pages) =
         fetch_all_pr_comments(&creds, &format!("{base}/pullrequests/{number}/comments")).await?;
     Ok(group_bb_threads(comments, &viewer_uuid))
 }
@@ -6839,7 +6868,7 @@ mod tests {
     /// folds it exactly as `view_pr` does.
     async fn fold_comment_pages(
         pages: Vec<Option<BbPage<BbComment>>>,
-    ) -> (Vec<PrThreadOut>, bool, usize) {
+    ) -> (Vec<PrThreadOut>, bool, bool, usize) {
         let mut pages = pages.into_iter();
         let mut requested = 0;
         let read = bb_walk_pages(format!("{BB_API_BASE}c?pagelen=100"), |_url| {
@@ -6848,9 +6877,10 @@ mod tests {
             async move { page.ok_or_else(|| AppError::Bitbucket("HTTP 502".into())) }
         })
         .await;
-        let (comments, unknown) =
-            comments_or_unknown(read.map(|values| conversation_comments(values, "")));
-        (comments, unknown, requested)
+        let (comments, unknown, truncated) = comments_or_unknown(
+            read.map(|(values, more_pages)| (conversation_comments(values, ""), more_pages)),
+        );
+        (comments, unknown, truncated, requested)
     }
 
     #[tokio::test]
@@ -6858,33 +6888,126 @@ mod tests {
         // A later page failing aborts the walk: page one's comments are NOT shown as
         // the whole conversation, the list is unknown.
         let next = format!("{BB_API_BASE}c?pagelen=100&page=2");
-        let (comments, unknown, requested) =
+        let (comments, unknown, truncated, requested) =
             fold_comment_pages(vec![Some(comments_page(&[1, 2], Some(&next))), None]).await;
         assert_eq!(requested, 2);
         assert!(comments.is_empty());
-        assert!(unknown);
+        assert_eq!((unknown, truncated), (true, false));
 
         // A failed first page is the same unknown list.
-        let (comments, unknown, _) = fold_comment_pages(vec![None]).await;
+        let (comments, unknown, truncated, _) = fold_comment_pages(vec![None]).await;
         assert!(comments.is_empty());
-        assert!(unknown);
+        assert_eq!((unknown, truncated), (true, false));
 
         // A read that succeeds empty is a known empty conversation.
-        let (comments, unknown, requested) =
+        let (comments, unknown, truncated, requested) =
             fold_comment_pages(vec![Some(comments_page(&[], None))]).await;
         assert_eq!(requested, 1);
         assert!(comments.is_empty());
-        assert!(!unknown);
+        assert_eq!((unknown, truncated), (false, false));
 
         // Every page landing folds them all, in server order.
-        let (comments, unknown, _) = fold_comment_pages(vec![
+        let (comments, unknown, truncated, _) = fold_comment_pages(vec![
             Some(comments_page(&[1, 2], Some(&next))),
             Some(comments_page(&[3], None)),
         ])
         .await;
-        assert!(!unknown);
+        assert_eq!((unknown, truncated), (false, false));
         let ids: Vec<&str> = comments.iter().map(|c| c.id.as_str()).collect();
         assert_eq!(ids, ["1", "2", "3"]);
+    }
+
+    #[tokio::test]
+    async fn comments_at_the_page_ceiling_are_unknown_only_with_a_remaining_next() {
+        // SYNTHETIC: the same five pages differ only in the final next link.
+        let next = format!("{BB_API_BASE}c?pagelen=100&page=6");
+        for more_pages in [false, true] {
+            let pages = (0..BB_MAX_PAGES)
+                .map(|page| {
+                    let next = (page + 1 < BB_MAX_PAGES || more_pages).then_some(next.as_str());
+                    Some(comments_page(&[page as u64 + 1], next))
+                })
+                .collect();
+            let (comments, unknown, truncated, requested) = fold_comment_pages(pages).await;
+            assert_eq!(requested, BB_MAX_PAGES);
+            assert_eq!((unknown, truncated), (more_pages, more_pages));
+            assert_eq!(comments.len(), BB_MAX_PAGES);
+            assert_eq!(comments[0].id, "1");
+        }
+    }
+
+    #[tokio::test]
+    async fn comments_keep_the_truncation_signal_when_next_is_off_origin() {
+        // SYNTHETIC: off-origin pages stay unread; an empty next is exhausted.
+        for (next, expected) in [("https://other.example/comments?page=2", true), ("", false)] {
+            let (comments, unknown, truncated, requested) =
+                fold_comment_pages(vec![Some(comments_page(&[1], Some(next)))]).await;
+            assert_eq!(requested, 1);
+            assert_eq!((unknown, truncated), (expected, expected));
+            assert_eq!(comments.len(), 1);
+            assert_eq!(comments[0].id, "1");
+        }
+    }
+
+    #[test]
+    fn status_pages_keep_remaining_next_as_a_truncation_signal() {
+        // SYNTHETIC: the same status with a remaining, absent or empty next URL.
+        for next in [Some("https://api.bitbucket.org/2.0/statuses?page=2"), None, Some("")] {
+            let page: BbPage<BbCommitStatus> = serde_json::from_value(serde_json::json!({
+                "values": [{"key": "ci", "name": "build", "state": "SUCCESSFUL"}],
+                "next": next,
+            }))
+            .unwrap();
+            let more = next.is_some_and(|n| !n.is_empty());
+            let (checks, unknown, truncated) =
+                read_or_unknown::<_, ()>(Ok(checks_from_status_page(page)));
+            assert_eq!((unknown, truncated), (more, more));
+            assert_eq!(checks.len(), 1);
+            assert_eq!(checks[0].name, "build");
+            assert_eq!(checks[0].status, "SUCCESS");
+            assert!(checks[0].run_id.is_none());
+            assert!(checks[0].job_id.is_none());
+        }
+    }
+
+    #[test]
+    fn failed_status_reads_are_unknown_without_claiming_truncation() {
+        // SYNTHETIC: a failed statuses fetch has no successful capped page.
+        let read: AppResult<BbPage<BbCommitStatus>> = Err(AppError::Bitbucket("HTTP 502".into()));
+        let (checks, unknown, truncated) = read_or_unknown(read.map(checks_from_status_page));
+        assert!(checks.is_empty());
+        assert_eq!((unknown, truncated), (true, false));
+    }
+
+    #[tokio::test]
+    async fn commit_walks_retain_partial_lists_and_mark_failed_reads_unknown() {
+        // SYNTHETIC: full bounded walks with/without next, followed by a failed read.
+        for more_pages in [false, true] {
+            let mut requested = 0;
+            let read = bb_walk_pages(format!("{BB_API_BASE}commits"), |_url| {
+                requested += 1;
+                let next = (requested < BB_MAX_PAGES || more_pages)
+                    .then(|| format!("{BB_API_BASE}commits?page={}", requested + 1));
+                let page: BbPage<BbCommit> = serde_json::from_value(serde_json::json!({
+                    "values": [{"hash": format!("sha-{requested}"), "message": "commit"}],
+                    "next": next
+                }))
+                .unwrap();
+                async move { Ok(page) }
+            })
+            .await;
+            let (commits, unknown, truncated) = read_or_unknown(read);
+            assert_eq!((unknown, truncated), (more_pages, more_pages));
+            assert_eq!(commits.len(), BB_MAX_PAGES);
+            assert_eq!(commits[0].hash, "sha-1");
+        }
+        let read = bb_walk_pages::<BbCommit, _, _>(format!("{BB_API_BASE}commits"), |_url| async {
+            Err(AppError::Bitbucket("HTTP 502".into()))
+        })
+        .await;
+        let (commits, unknown, truncated) = read_or_unknown(read);
+        assert!(commits.is_empty());
+        assert_eq!((unknown, truncated), (true, false));
     }
 
     #[test]

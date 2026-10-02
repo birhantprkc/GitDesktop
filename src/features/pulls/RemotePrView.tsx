@@ -74,6 +74,7 @@ import {
   offlinePendingMessage,
   refreshFailed,
   resolveDetailPane,
+  unknownListNotice,
 } from "@/features/conversations/remote-section-state";
 import { AuthorAvatar, LabelChip } from "@/features/conversations/Thread";
 import { useCancelOnIdentityChange } from "@/features/conversations/useAiStream";
@@ -295,13 +296,15 @@ const PROVIDER_MERGE_STRATEGIES: Record<
 };
 
 /** Tab labels for this view's sections, function-valued because three of the four
- *  carry a live count. An unread comments list has no count to show, not zero. */
+ *  carry a live count. An unread or possibly partial list has no count to show,
+ *  not its length. */
 const SECTION_LABEL: Record<PrSection, (pr: PrDetails) => string> = {
   conversation: (pr) =>
     pr.commentsUnknown
       ? "Conversation"
       : `Conversation (${pr.comments.length})`,
-  commits: (pr) => `Commits (${pr.commits.length})`,
+  commits: (pr) =>
+    pr.commitsUnknown ? "Commits" : `Commits (${pr.commits.length})`,
   files: (pr) => `Files (${pr.files.length})`,
   review: () => "Review",
 };
@@ -2738,6 +2741,22 @@ export function RemotePrView({
             {metaCells}
           </div>
         ) : null}
+        {/* Verdicts ride their own sub-read; without them an assigned reviewer's
+            plain chip would read as still pending. Gated on the flag alone:
+            GitLab skips the verdicts read when nobody is assigned (so it stays
+            false), while on GitHub acted reviewers leave the assigned list, so
+            an empty list with unknown verdicts still hides finished reviews. */}
+        <DegradedListNotice
+          noun="review status"
+          degraded={pr.reviewersUnknown}
+          message={
+            details.isPaused
+              ? offlinePendingMessage("review status")
+              : "Couldn't fully load review status — reviewers may show without their latest verdicts."
+          }
+          onRetry={details.isPaused ? undefined : () => void details.refetch()}
+          className="px-0 pb-0"
+        />
         {/* GitLab-only time-tracking summary; a popover with estimate/add-spent
             while the MR is open, static once closed. */}
         {canTrackTime && (
@@ -2819,6 +2838,7 @@ export function RemotePrView({
           key={settledEntityKey ?? `pending-${entityKey}`}
           checks={pr.checks}
           checksUnknown={pr.checksUnknown}
+          checksTruncated={pr.checksTruncated}
           detailsPaused={details.isPaused}
           onRetryChecks={() => void details.refetch()}
           repoPath={repoPath}
@@ -3046,14 +3066,13 @@ export function RemotePrView({
               <DegradedListNotice
                 noun="comments"
                 degraded={pr.commentsUnknown}
-                message={
-                  details.isPaused
-                    ? offlinePendingMessage("the comments")
-                    : `Couldn't load this ${prNoun}'s comments.`
-                }
-                onRetry={
-                  details.isPaused ? undefined : () => void details.refetch()
-                }
+                {...unknownListNotice({
+                  prNoun,
+                  list: "comments",
+                  truncated: pr.commentsTruncated,
+                  paused: details.isPaused,
+                  onRetry: () => void details.refetch(),
+                })}
                 className="px-0 pb-0"
               />
               <PrActivityFeed
@@ -3174,6 +3193,7 @@ export function RemotePrView({
                 pr.comments.length === 0 &&
                 !pr.commentsUnknown &&
                 pr.commits.length === 0 &&
+                !pr.commitsUnknown &&
                 timeline.data !== undefined &&
                 timeline.data.length === 0 &&
                 threadClaims.visibleThreads !== undefined &&
@@ -3374,18 +3394,34 @@ export function RemotePrView({
               />
             );
           }
+          // The commits ride a sub-fetch that can fail or come back capped; the
+          // notice stays mounted so a Retry that lands hands focus to its wrapper.
           return (
-            <CommitsList
-              commits={pr.commits.map((c) => ({
-                id: c.oid,
-                subject: c.headline,
-                shortSha: c.oid.slice(0, 7),
-                author: c.author,
-                date: c.date,
-              }))}
-              onSelect={setSelectedCommitOid}
-              selectedId={selectedCommitOid}
-            />
+            <>
+              <DegradedListNotice
+                noun="commits"
+                degraded={pr.commitsUnknown}
+                {...unknownListNotice({
+                  prNoun,
+                  list: "commits",
+                  truncated: pr.commitsTruncated,
+                  paused: details.isPaused,
+                  onRetry: () => void details.refetch(),
+                })}
+                className="shrink-0 border-b px-4 py-1.5"
+              />
+              <CommitsList
+                commits={pr.commits.map((c) => ({
+                  id: c.oid,
+                  subject: c.headline,
+                  shortSha: c.oid.slice(0, 7),
+                  author: c.author,
+                  date: c.date,
+                }))}
+                onSelect={setSelectedCommitOid}
+                selectedId={selectedCommitOid}
+              />
+            </>
           );
         })()}
 

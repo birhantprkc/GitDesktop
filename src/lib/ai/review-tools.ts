@@ -306,7 +306,10 @@ export function buildReviewTools(ctx: ReviewToolContext): ToolSet {
     tools.get_pull_request = tool({
       description:
         "This pull request's metadata and changed-file summary (title, body, " +
-        "state, branches, commits, files, labels, reviewers) from the forge.",
+        "state, branches, commits, files, labels, reviewers) from the forge. " +
+        "commitsUnknown means the commits could not be fully read, so commits " +
+        "may be partial or empty, and commitsTruncated means the read hit a cap " +
+        "(the list may be partial and retrying returns the same list).",
       inputSchema: z.object({}),
       execute: async (_input, { abortSignal }) => {
         try {
@@ -327,6 +330,8 @@ export function buildReviewTools(ctx: ReviewToolContext): ToolSet {
               hash: c.oid,
               subject: c.headline,
             })),
+            commitsUnknown: pr.commitsUnknown,
+            commitsTruncated: pr.commitsTruncated,
             files: pr.files.map((f) => ({
               path: f.path,
               additions: f.additions,
@@ -351,7 +356,11 @@ export function buildReviewTools(ctx: ReviewToolContext): ToolSet {
         "reply chains. Each thread's diffHunk code-context excerpt (GitHub only) " +
         "is capped to its last few lines; set include_diff_hunk false to drop " +
         "hunks entirely (default true). commentsUnknown means the comments " +
-        "could not be read and an empty comments is a missing list.",
+        "could not be fully read, so comments may be partial or empty, and " +
+        "commentsTruncated means the read hit a cap (the list may be partial " +
+        "and retrying returns the same list). reviewersUnknown means reviewer " +
+        "verdicts could not be fully read; on GitHub, reviews may then be " +
+        "partial.",
       inputSchema: z.object({
         include_diff_hunk: z
           .boolean()
@@ -386,7 +395,9 @@ export function buildReviewTools(ctx: ReviewToolContext): ToolSet {
             number: prNumber,
             comments: pr.comments.map(stripEmptyCommentDefaults),
             commentsUnknown: pr.commentsUnknown,
+            commentsTruncated: pr.commentsTruncated,
             reviews: pr.reviews.map(stripEmptyCommentDefaults),
+            reviewersUnknown: pr.reviewersUnknown,
             review_threads: cappedThreads.map((t) => {
               const pruned = stripEmptyCommentDefaults(t);
               if (Array.isArray(t.comments)) {
