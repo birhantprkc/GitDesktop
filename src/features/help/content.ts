@@ -410,8 +410,11 @@ menu item appears only when you have it, greyed out while your access is being c
   fast-forward), the **squash policy**, and the merge checks (pipelines must succeed,
   all threads resolved, delete source branch by default).
 - **Members** — add someone by username at a role (Guest … Owner), change a role
-  inline, or remove them. Members **inherited from a group** show read-only — they're
-  managed on the group.
+  inline, or remove them. A personal project's owner is badged **Owner**, and its
+  Remove button explains the owner can't be removed; Add and the role pickers say
+  why they're unavailable while held (offline, or a change still saving). Loaded
+  members stay listed when a refresh fails (with a **Retry**) or you're offline.
+  Members **inherited from a group** show read-only — they're managed on the group.
 - **Protected branches** — protect a branch or wildcard with per-rule **allowed to
   push** / **allowed to merge** access levels and an **allow force push** toggle;
   unprotect with a confirm. Rules **inherited from a group** show read-only. Access

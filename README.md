@@ -372,11 +372,13 @@ in one click.
   failures and tagged *required*. A running **GitHub Actions** check shows
   its current step inline and a live step checklist when expanded;
   finished **GitHub Actions** and **GitLab pipeline** jobs peek their logs
-  inline; **Bitbucket** build statuses and other external checks link out
-  (name/state/URL, no fetchable logs). A failing rollup offers the re-run
-  right on its summary line — **Re-run failed jobs** on GitHub, **Retry
-  pipeline** on GitLab, and **Re-run failed jobs / Retry pipeline** in the
-  command palette (Bitbucket has no pull-request-scoped re-run). Each
+  inline (a GitLab MR whose pipeline runs in the contributor's fork lists
+  its jobs as links out, with no inline log or re-run); **Bitbucket**
+  build statuses and other external checks link out (name/state/URL, no
+  fetchable logs). A failing rollup offers the re-run right on its
+  summary line — **Re-run failed jobs** on GitHub, **Retry pipeline** on
+  GitLab, and **Re-run failed jobs / Retry pipeline** in the command
+  palette (Bitbucket has no pull-request-scoped re-run). Each
   failed row with a fetchable job re-runs on its own too: **Re-run** on
   GitHub (offered once the job's run has finished) restarts that job
   plus any jobs that depend on it, and **Retry** on GitLab (offered as
