@@ -48,7 +48,7 @@ use crate::github::pr::{
     comments_or_unknown, read_or_unknown, ApprovalState, CommitCommentOut,
     DraftCommentIn, PrAuthor, PrCiRefIn, PrCiStatus, PrCommitOut, PrDetails, PrFileOut,
     PrHeadRef, PrInfo, PrListLabel, PrMergeability, PrPollInfo, PrRef, PrThreadOut,
-    ReviewSubmitOut, ReviewThreadOut,
+    ReviewSubmitOut, ReviewThreadOut, ReviewThreadsOut,
 };
 
 /// Whether this process has SUCCESSFULLY seeded git's credential store this session
@@ -461,8 +461,22 @@ async fn bb_paginate_with_truncation<T: serde::de::DeserializeOwned>(
 /// GitLab's full-page heuristic. Followed URLs stay within the authenticated origin.
 async fn bb_walk_pages<T, F, Fut>(
     first_url: String,
-    mut fetch_page: F,
+    fetch_page: F,
 ) -> AppResult<(Vec<T>, bool)>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = AppResult<BbPage<T>>>,
+{
+    let (rows, outcome) = bb_walk_pages_retaining(first_url, fetch_page).await;
+    outcome.map(|truncated| (rows, truncated))
+}
+
+/// Keep parsed pages alongside the outcome so callers choose whether to retain
+/// them on failure. The successful outcome reports unread next pages.
+async fn bb_walk_pages_retaining<T, F, Fut>(
+    first_url: String,
+    mut fetch_page: F,
+) -> (Vec<T>, AppResult<bool>)
 where
     F: FnMut(String) -> Fut,
     Fut: std::future::Future<Output = AppResult<BbPage<T>>>,
@@ -470,15 +484,18 @@ where
     let mut url = first_url;
     let mut out: Vec<T> = Vec::new();
     for _ in 0..BB_MAX_PAGES {
-        let page = fetch_page(url).await?;
+        let page = match fetch_page(url).await {
+            Ok(page) => page,
+            Err(error) => return (out, Err(error)),
+        };
         out.extend(page.values);
         let has_next = page.next.as_deref().is_some_and(|next| !next.is_empty());
         match next_page_url(page.next) {
             Some(next) => url = next,
-            None => return Ok((out, has_next)),
+            None => return (out, Ok(has_next)),
         }
     }
-    Ok((out, true))
+    (out, Ok(true))
 }
 
 // ── Repository listing (clone browser) ─────────────────────────────────────────
@@ -1588,6 +1605,28 @@ fn commit_author(c: &BbCommit) -> String {
         .unwrap_or_default()
 }
 
+/// The PR source embeds a short hash; only the newest commit's full oid is usable.
+fn full_head_oid(commits: &[PrCommitOut]) -> Option<String> {
+    commits
+        .last()
+        .map(|c| &c.oid)
+        .filter(|oid| matches!(oid.len(), 40 | 64) && oid.bytes().all(|b| b.is_ascii_hexdigit()))
+        .cloned()
+}
+
+/// Retain parsed pages on failure, with unknown but not truncated files.
+async fn diffstat_paged<F, Fut>(first_url: String, fetch_page: F) -> (Vec<BbDiffstat>, bool, bool)
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = AppResult<BbPage<BbDiffstat>>>,
+{
+    let (rows, outcome) = bb_walk_pages_retaining(first_url, fetch_page).await;
+    match outcome {
+        Ok(truncated) => (rows, truncated, truncated),
+        Err(_) => (rows, true, false),
+    }
+}
+
 /// Full read view of one pull request — the single PR GET (hard error) plus best-effort
 /// sub-fetches (commits, diffstat, comments, statuses), mapped onto `PrDetails`.
 /// `reviews` is empty: a Bitbucket "approved" participant has no body/state text to
@@ -1605,8 +1644,7 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
     // Core PR — a hard error (the view can't render without it).
     let pr: BbPr = http::bb_get_json(&creds, &base, "pull request", BbOpKind::Read).await?;
 
-    // Commits — Bitbucket returns newest-first; the neutral model wants oldest-first
-    // (the frontend treats the last as head), matching gitlab's reversal.
+    // Bitbucket returns newest-first; reverse to the neutral model's oldest-first order.
     let (mut commits, commits_unknown, commits_truncated) = read_or_unknown(
         bb_paginate_with_truncation::<BbCommit>(
             &creds,
@@ -1630,38 +1668,34 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
     );
     commits.reverse();
 
-    // Diffstat → files + additions/deletions totals.
+    // Follow diffstat next links up to BB_MAX_PAGES, retaining parsed pages on failure.
+    let (diffstat, files_unknown, files_truncated) =
+        diffstat_paged(format!("{base}/diffstat?pagelen=100"), |url| {
+            let creds = &creds;
+            async move { http::bb_get_json(creds, &url, "diffstat", BbOpKind::Read).await }
+        })
+        .await;
     let mut additions = 0u32;
     let mut deletions = 0u32;
-    let files: Vec<PrFileOut> = http::bb_get_json::<BbPage<BbDiffstat>>(
-        &creds,
-        &format!("{base}/diffstat?pagelen=100"),
-        "diffstat",
-        BbOpKind::Read,
-    )
-    .await
-    .map(|page| {
-        page.values
-            .into_iter()
-            .map(|d| {
-                additions += d.lines_added;
-                deletions += d.lines_removed;
-                // Prefer the new path; fall back to old (a delete has new=null).
-                let path = d
-                    .new
-                    .map(|p| p.path)
-                    .filter(|p| !p.is_empty())
-                    .or_else(|| d.old.map(|p| p.path))
-                    .unwrap_or_default();
-                PrFileOut {
-                    path,
-                    additions: d.lines_added,
-                    deletions: d.lines_removed,
-                }
-            })
-            .collect()
-    })
-    .unwrap_or_default();
+    let files: Vec<PrFileOut> = diffstat
+        .into_iter()
+        .map(|d| {
+            additions += d.lines_added;
+            deletions += d.lines_removed;
+            // Prefer the new path; fall back to old (a delete has new=null).
+            let path = d
+                .new
+                .map(|p| p.path)
+                .filter(|p| !p.is_empty())
+                .or_else(|| d.old.map(|p| p.path))
+                .unwrap_or_default();
+            PrFileOut {
+                path,
+                additions: d.lines_added,
+                deletions: d.lines_removed,
+            }
+        })
+        .collect();
 
     // Resolve the viewer's account uuid once (tolerant — a failure just leaves
     // every comment's edit/delete hidden; it must not fail the view). Drives the
@@ -1721,11 +1755,14 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
         is_draft: pr.draft,
         base_ref_name: branch_name(&pr.destination),
         head_ref_name: branch_name(&pr.source),
+        head_sha: full_head_oid(&commits),
         additions,
         deletions,
         url: html_href(&pr.links),
         commits,
         files,
+        files_unknown,
+        files_truncated,
         reviews: Vec::new(),
         comments,
         checks,
@@ -2912,7 +2949,7 @@ async fn fetch_all_pr_comments(
 /// File:line-anchored review threads on a PR — Bitbucket inline comments grouped with
 /// their reply chains. Own fetch, kept separate from `view_pr`'s conversation read; reads
 /// all comment pages because `group_bb_threads` walks parent chains across ALL comments.
-pub async fn review_threads(repo_path: &str, number: u64) -> AppResult<Vec<ReviewThreadOut>> {
+pub async fn review_threads(repo_path: &str, number: u64) -> AppResult<ReviewThreadsOut> {
     let creds = http::load_credentials().await?;
     let base = repo_base(repo_path).await?;
 
@@ -2925,9 +2962,12 @@ pub async fn review_threads(repo_path: &str, number: u64) -> AppResult<Vec<Revie
         .unwrap_or_default();
 
     // `repo_base` has no `/pullrequests/{n}` suffix, so add it for the endpoint.
-    let (comments, _more_pages) =
+    let (comments, threads_truncated) =
         fetch_all_pr_comments(&creds, &format!("{base}/pullrequests/{number}/comments")).await?;
-    Ok(group_bb_threads(comments, &viewer_uuid))
+    Ok(ReviewThreadsOut {
+        threads: group_bb_threads(comments, &viewer_uuid),
+        threads_truncated,
+    })
 }
 
 /// Reply in an existing review thread (`POST …/comments`, `{"content":{"raw"},
@@ -6977,6 +7017,101 @@ mod tests {
         let (checks, unknown, truncated) = read_or_unknown(read.map(checks_from_status_page));
         assert!(checks.is_empty());
         assert_eq!((unknown, truncated), (true, false));
+    }
+
+    async fn walk_diffstat(pages: Vec<Option<String>>) -> (Vec<BbDiffstat>, bool, bool, Vec<String>) {
+        let mut pages = pages.into_iter();
+        let mut requested = Vec::new();
+        let (rows, unknown, truncated) = diffstat_paged(format!("{BB_API_BASE}diffstat"), |url| {
+            requested.push(url);
+            let page = pages.next().flatten();
+            async move {
+                let body = page.ok_or_else(|| AppError::Bitbucket("HTTP 502".into()))?;
+                serde_json::from_str(&body).map_err(|e| AppError::Bitbucket(e.to_string()))
+            }
+        })
+        .await;
+        (rows, unknown, truncated, requested)
+    }
+
+    fn diffstat_page(path: &str, next: Option<&str>) -> String {
+        serde_json::json!({
+            "values": [{"new": {"path": path}, "lines_added": 2, "lines_removed": 1}],
+            "next": next,
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn diffstat_failed_reads_are_unknown_and_keep_preceding_pages() {
+        let next = format!("{BB_API_BASE}diffstat?page=2");
+        for failure in [None, Some("<html>502</html>".into())] {
+            let (rows, unknown, truncated, requested) = walk_diffstat(vec![failure.clone()]).await;
+            assert!(rows.is_empty());
+            assert_eq!((unknown, truncated), (true, false));
+            assert_eq!(requested.len(), 1);
+            let (rows, unknown, truncated, requested) = walk_diffstat(vec![
+                Some(diffstat_page("first.rs", Some(&next))),
+                failure,
+            ])
+            .await;
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].new.as_ref().unwrap().path, "first.rs");
+            assert_eq!((unknown, truncated), (true, false));
+            assert_eq!(requested.len(), 2);
+        }
+        let (rows, unknown, truncated, _) = walk_diffstat(vec![Some(r#"{"values":[]}"#.into())]).await;
+        assert!(rows.is_empty());
+        assert_eq!((unknown, truncated), (false, false));
+    }
+
+    #[tokio::test]
+    async fn diffstat_follows_next_verbatim_and_reports_the_page_cap() {
+        let next = format!("{BB_API_BASE}diffstat?pagelen=100&page=2&fields=values,next");
+        let (rows, unknown, truncated, requested) = walk_diffstat(vec![
+            Some(diffstat_page("first.rs", Some(&next))),
+            Some(diffstat_page("second.rs", None)),
+        ])
+        .await;
+        assert_eq!(requested[1], next);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].new.as_ref().unwrap().path, "second.rs");
+        assert_eq!((unknown, truncated), (false, false));
+        for more in [false, true] {
+            let pages = (0..BB_MAX_PAGES)
+                .map(|page| {
+                    Some(diffstat_page(
+                        "file.rs",
+                        (page + 1 < BB_MAX_PAGES || more).then_some(next.as_str()),
+                    ))
+                })
+                .collect();
+            let (rows, unknown, truncated, requested) = walk_diffstat(pages).await;
+            assert_eq!(requested.len(), BB_MAX_PAGES);
+            assert_eq!(rows.len(), BB_MAX_PAGES);
+            assert_eq!((unknown, truncated), (more, more));
+        }
+    }
+
+    #[test]
+    fn detail_head_requires_the_newest_full_commit_oid() {
+        assert_eq!(full_head_oid(&[]), None);
+        let commit = |oid: String| PrCommitOut {
+            oid,
+            headline: String::new(),
+            message_body: String::new(),
+            date: String::new(),
+            author: String::new(),
+        };
+        let full = "a".repeat(40);
+        assert_eq!(
+            full_head_oid(&[commit("b".repeat(40)), commit(full.clone())]),
+            Some(full)
+        );
+        assert_eq!(
+            full_head_oid(&[commit("a".repeat(40)), commit("b".repeat(12))]),
+            None
+        );
     }
 
     #[tokio::test]

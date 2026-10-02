@@ -3998,6 +3998,14 @@ pub struct PrThreadOut {
     pub review_id: String,
 }
 
+/// A bounded review-thread read; consumers must not infer completeness from row count.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewThreadsOut {
+    pub threads: Vec<ReviewThreadOut>,
+    pub threads_truncated: bool,
+}
+
 /// One file:line-anchored review thread, provider-neutral. GitHub: a GraphQL
 /// PullRequestReviewThread; GitLab: an MR diff-note discussion; Bitbucket: an
 /// inline comment and its reply chain.
@@ -4124,6 +4132,10 @@ pub struct PrDetails {
     pub is_draft: bool,
     pub base_ref_name: String,
     pub head_ref_name: String,
+    /// GitHub's `headRefOid`, GitLab's MR `sha` (newest commit as fallback),
+    /// Bitbucket's newest commit (its PR source hash is abbreviated);
+    /// null when none could be read.
+    pub head_sha: Option<String>,
     pub additions: u32,
     pub deletions: u32,
     pub url: String,
@@ -4203,6 +4215,13 @@ pub struct PrDetails {
     /// `commits_truncated` implies `commits_unknown`. Failed reads are unknown
     /// with `commits_truncated == false`; consumers must not infer this from row count.
     pub commits_truncated: bool,
+    /// True when the files read failed or may be incomplete; partial files may remain.
+    /// Consumers must not infer this from row count.
+    pub files_unknown: bool,
+    /// True when the read succeeded but hit a pagination cap; a retry returns the same list.
+    /// Implies `files_unknown`; a failed read is unknown but never truncated.
+    /// Consumers must not infer this from row count.
+    pub files_truncated: bool,
     /// True when the read failed or may be incomplete; consumers must not
     /// present reviewer verdicts as complete or assume assigned reviewers are pending.
     /// The assigned `reviewers` list stays complete; only verdicts are unknown.
@@ -4225,6 +4244,18 @@ pub struct PrDetails {
 /// GitHub's pull-request commits endpoint returns at most 250 commits.
 /// Source: <https://docs.github.com/en/rest/pulls/pulls#list-commits-on-a-pull-request>.
 const GH_REST_PR_COMMITS_CEILING: usize = 250;
+
+/// GitHub's pull-request files endpoint returns at most 3000 files.
+/// Source: <https://docs.github.com/en/rest/pulls/pulls#list-pull-requests-files>.
+const GH_REST_PR_FILES_CEILING: usize = 3000;
+
+/// Failed files top-ups retain the base rows as unknown; successful reads may hit the REST cap.
+fn gh_files_top_up_or_unknown<T, E>(
+    graphql_rows: Vec<T>,
+    top_up: Option<Result<Vec<T>, E>>,
+) -> (Vec<T>, bool, bool) {
+    gh_top_up_or_unknown(graphql_rows, top_up, Some(GH_REST_PR_FILES_CEILING))
+}
 
 /// A missing top-up means the GraphQL list was below 100 rows. Failed top-ups
 /// retain those rows as unknown; successful REST reads may reach an endpoint cap.
@@ -4665,36 +4696,34 @@ pub async fn gh_pr_view(
     // `gh pr view --json files` caps at GitHub's GraphQL 100-item connection limit;
     // complete from the paginated REST files API when we hit it. Best-effort: a REST
     // failure keeps the 100 GraphQL entries rather than failing the view.
-    let files: Vec<PrFileOut> = if raw.files.len() >= 100 {
-        match gh_pr_files_paginated(&repo_path, number, lens.as_deref()).await {
-            Ok(complete) => complete
-                .into_iter()
-                .map(|f| PrFileOut {
-                    path: f.filename,
-                    additions: f.additions,
-                    deletions: f.deletions,
-                })
-                .collect(),
-            Err(_) => raw
-                .files
-                .into_iter()
-                .map(|f| PrFileOut {
-                    path: f.path,
-                    additions: f.additions,
-                    deletions: f.deletions,
-                })
-                .collect(),
-        }
+    let files_top_up = if raw.files.len() >= 100 {
+        Some(
+            gh_pr_files_paginated(&repo_path, number, lens.as_deref())
+                .await
+                .map(|complete| {
+                    complete
+                        .into_iter()
+                        .map(|f| PrFileOut {
+                            path: f.filename,
+                            additions: f.additions,
+                            deletions: f.deletions,
+                        })
+                        .collect()
+                }),
+        )
     } else {
-        raw.files
-            .into_iter()
-            .map(|f| PrFileOut {
-                path: f.path,
-                additions: f.additions,
-                deletions: f.deletions,
-            })
-            .collect()
+        None
     };
+    let graphql_files = raw.files
+        .into_iter()
+        .map(|f| PrFileOut {
+            path: f.path,
+            additions: f.additions,
+            deletions: f.deletions,
+        })
+        .collect();
+    let (files, files_unknown, files_truncated) =
+        gh_files_top_up_or_unknown(graphql_files, files_top_up);
 
     // At 100 GraphQL rows, top up commits/reviews/comments from paginated REST.
     // A failed top-up retains the GraphQL rows and flags that list unknown.
@@ -4808,11 +4837,14 @@ pub async fn gh_pr_view(
         is_draft: raw.is_draft,
         base_ref_name: raw.base_ref_name,
         head_ref_name: raw.head_ref_name,
+        head_sha: (!raw.head_ref_oid.is_empty()).then_some(raw.head_ref_oid),
         additions: raw.additions,
         deletions: raw.deletions,
         url: raw.url,
         commits,
         files,
+        files_unknown,
+        files_truncated,
         reviews,
         comments,
         checks: map_gh_checks(raw.status_check_rollup, check_runs.as_deref()),
@@ -5736,10 +5768,9 @@ struct GhPrFile {
     deletions: u32,
 }
 
-/// Fetches the PR's complete changed-file list via the paginated files REST API.
-/// `gh pr view --json files` and `gh pr diff` both cap at GitHub's GraphQL 100-file
-/// connection limit; this endpoint paginates past it. Used both to reconstruct the
-/// >300-file diff and to complete the PR-view file rail.
+/// Fetches changed files past the GraphQL 100-item cap via the paginated REST API.
+/// REST stops at [`GH_REST_PR_FILES_CEILING`]; the view fold reports that ceiling.
+/// Also used to reconstruct the diff when `gh pr diff` cannot serve it.
 async fn gh_pr_files_paginated(
     repo_path: &str,
     number: u64,
@@ -6428,7 +6459,7 @@ pub async fn gh_pr_review_threads(
     repo_path: String,
     number: u64,
     lens: Option<String>,
-) -> AppResult<Vec<ReviewThreadOut>> {
+) -> AppResult<ReviewThreadsOut> {
     let (owner, name) = repo_owner_name(&repo_path, lens.as_deref()).await?;
     validate_graphql_embed(&owner, "repository owner")?;
     validate_graphql_embed(&name, "repository name")?;
@@ -6440,6 +6471,33 @@ pub async fn gh_pr_review_threads(
         r#"query($cursor: String){{ repository(owner:"{owner}", name:"{name}"){{ pullRequest(number:{number}){{ reviewThreads(first:100, after:$cursor){{ pageInfo{{ endCursor hasNextPage }} nodes{{ id isResolved isOutdated diffSide line originalLine startLine originalStartLine path comments(first:50){{ pageInfo{{ hasNextPage endCursor }} nodes{{ id author{{ login }} body createdAt url viewerDidAuthor isMinimized minimizedReason diffHunk pullRequestReview{{ id }} }} }} }} }} }} }} }}"#
     );
 
+    gh_review_threads_paged(&repo_path, |cursor| {
+        let repo_path = &repo_path;
+        let query = &query;
+        async move {
+            // Omit the first cursor: an absent GraphQL variable is null.
+            let mut args: Vec<String> =
+                vec!["api".into(), "graphql".into(), "-f".into(), format!("query={query}")];
+            if let Some(c) = cursor {
+                args.push("-f".into());
+                args.push(format!("cursor={c}"));
+            }
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let out = run_gh(Some(repo_path), &arg_refs, GH_NETWORK_TIMEOUT).await?;
+            Ok(out.stdout_lossy())
+        }
+    })
+    .await
+}
+
+async fn gh_review_threads_paged<F, Fut>(
+    repo_path: &str,
+    mut fetch_page: F,
+) -> AppResult<ReviewThreadsOut>
+where
+    F: FnMut(Option<String>) -> Fut,
+    Fut: std::future::Future<Output = AppResult<String>>,
+{
     let str_at = |v: &serde_json::Value, p: &str| {
         v.pointer(p).and_then(|x| x.as_str()).unwrap_or("").to_string()
     };
@@ -6467,19 +6525,10 @@ pub async fn gh_pr_review_threads(
 
     let mut threads: Vec<ReviewThreadOut> = Vec::new();
     let mut cursor: Option<String> = None;
+    let mut threads_truncated = false;
     // Bounded at 5 pages (500 threads) — a larger PR truncates rather than looping.
     for _ in 0..5 {
-        // The `cursor` variable is omitted on the first request (a missing GraphQL
-        // variable is null → the first page); later pages pass the prior endCursor.
-        let mut args: Vec<String> =
-            vec!["api".into(), "graphql".into(), "-f".into(), format!("query={query}")];
-        if let Some(c) = &cursor {
-            args.push("-f".into());
-            args.push(format!("cursor={c}"));
-        }
-        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let out = run_gh(Some(&repo_path), &arg_refs, GH_NETWORK_TIMEOUT).await?;
-        let value: serde_json::Value = serde_json::from_str(&out.stdout_lossy()).map_err(|e| {
+        let value: serde_json::Value = serde_json::from_str(&fetch_page(cursor).await?).map_err(|e| {
             gh_unreadable(
                 "the review threads",
                 format!("could not parse the PR review threads: {e}"),
@@ -6509,7 +6558,7 @@ pub async fn gh_pr_review_threads(
                     let thread_id = str_at(t, "/id");
                     if !thread_id.is_empty() {
                         if let Ok(extra) =
-                            gh_thread_comment_replies_topup(&repo_path, &thread_id, &inner_cursor, &map_comment)
+                            gh_thread_comment_replies_topup(repo_path, &thread_id, &inner_cursor, &map_comment)
                                 .await
                         {
                             comments.extend(extra);
@@ -6562,6 +6611,7 @@ pub async fn gh_pr_review_threads(
             .and_then(|rt| rt.pointer("/pageInfo/hasNextPage"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        threads_truncated = has_next;
         let end_cursor = review_threads
             .and_then(|rt| rt.pointer("/pageInfo/endCursor"))
             .and_then(|v| v.as_str())
@@ -6571,7 +6621,10 @@ pub async fn gh_pr_review_threads(
         }
         cursor = Some(end_cursor.to_string());
     }
-    Ok(threads)
+    Ok(ReviewThreadsOut {
+        threads,
+        threads_truncated,
+    })
 }
 
 /// Replies in an existing review thread, addressed by its GraphQL node id. The id
@@ -7350,11 +7403,14 @@ mod tests {
             is_draft: false,
             base_ref_name: String::new(),
             head_ref_name: String::new(),
+            head_sha: None,
             additions: 0,
             deletions: 0,
             url: String::new(),
             commits: Vec::new(),
             files: Vec::new(),
+            files_unknown: false,
+            files_truncated: false,
             reviews: Vec::new(),
             comments: Vec::new(),
             checks: Vec::new(),
@@ -7475,11 +7531,14 @@ mod tests {
             details.checks_unknown = unknown;
             details.commits_unknown = unknown;
             details.reviewers_unknown = unknown;
+            details.files_unknown = unknown;
+            details.files_truncated = truncated;
+            details.head_sha = (!unknown).then(|| "a".repeat(40));
             details.comments_truncated = truncated;
             details.commits_truncated = truncated;
             details.checks_truncated = truncated;
             let v = serde_json::to_value(&details).unwrap();
-            for field in ["comments", "commits", "checks"] {
+            for field in ["comments", "commits", "checks", "files"] {
                 assert_eq!(v[format!("{field}Unknown")], unknown);
                 assert_eq!(v[format!("{field}Truncated")], truncated);
                 assert!(v.get(format!("{field}_unknown")).is_none());
@@ -7487,6 +7546,111 @@ mod tests {
             }
             assert_eq!(v["reviewersUnknown"], unknown);
             assert!(v.get("reviewers_unknown").is_none());
+            assert_eq!(v["headSha"], serde_json::json!(details.head_sha));
+            assert!(v.get("head_sha").is_none());
+        }
+    }
+
+    #[test]
+    fn review_threads_wrapper_uses_camel_case() {
+        for truncated in [false, true] {
+            let value = serde_json::to_value(super::ReviewThreadsOut {
+                threads: Vec::new(),
+                threads_truncated: truncated,
+            })
+            .unwrap();
+            assert_eq!(
+                value,
+                serde_json::json!({ "threads": [], "threadsTruncated": truncated })
+            );
+        }
+    }
+
+    async fn walk_review_threads(
+        pages: Vec<(bool, &str)>,
+    ) -> (super::ReviewThreadsOut, Vec<Option<String>>) {
+        let mut pages = pages.into_iter();
+        let mut requested = Vec::new();
+        let result = super::gh_review_threads_paged("", |cursor| {
+            requested.push(cursor);
+            let (has_next, end_cursor) = pages.next().expect("unexpected page request");
+            let body = serde_json::json!({
+                "data": {"repository": {"pullRequest": {"reviewThreads": {
+                    "pageInfo": {"hasNextPage": has_next, "endCursor": end_cursor},
+                    "nodes": [{"id": end_cursor, "comments": {"nodes": [{"body": "comment"}]}}],
+                }}}}
+            })
+            .to_string();
+            async move { Ok(body) }
+        })
+        .await
+        .unwrap();
+        (result, requested)
+    }
+
+    #[tokio::test]
+    async fn review_threads_report_remaining_pages_at_the_five_page_cap() {
+        let (result, requested) = walk_review_threads(vec![
+            (true, "1"),
+            (true, "2"),
+            (true, "3"),
+            (true, "4"),
+            (true, "5"),
+        ])
+        .await;
+        assert!(result.threads_truncated);
+        assert_eq!(result.threads.len(), 5);
+        assert_eq!(
+            requested,
+            vec![None, Some("1".into()), Some("2".into()), Some("3".into()), Some("4".into())]
+        );
+    }
+
+    #[tokio::test]
+    async fn review_threads_are_complete_when_an_early_page_has_no_next() {
+        let (result, requested) = walk_review_threads(vec![(true, "next"), (false, "done")]).await;
+        assert!(!result.threads_truncated);
+        assert_eq!(result.threads.len(), 2);
+        assert_eq!(requested, vec![None, Some("next".into())]);
+    }
+
+    #[tokio::test]
+    async fn review_threads_report_unread_pages_when_the_cursor_is_empty() {
+        let (result, requested) = walk_review_threads(vec![(true, "")]).await;
+        assert!(result.threads_truncated);
+        assert_eq!(result.threads.len(), 1);
+        assert_eq!(requested, vec![None]);
+    }
+
+    #[test]
+    fn files_top_up_failure_retains_base_rows_as_unknown_without_truncation() {
+        let base: Vec<_> = (0..100).collect();
+        let (rows, unknown, truncated) =
+            super::gh_files_top_up_or_unknown(base.clone(), Some(Err::<Vec<i32>, _>(())));
+        assert_eq!(rows, base);
+        assert_eq!((unknown, truncated), (true, false));
+        for top_up in [None, Some(Ok::<_, ()>(vec![101]))] {
+            let expected = if top_up.is_some() {
+                vec![101]
+            } else {
+                base.clone()
+            };
+            let (rows, unknown, truncated) = super::gh_files_top_up_or_unknown(base.clone(), top_up);
+            assert_eq!(rows, expected);
+            assert_eq!((unknown, truncated), (false, false));
+        }
+    }
+
+    #[test]
+    fn files_top_ups_report_the_rest_ceiling() {
+        for count in [0, 2999, 3000] {
+            let expected: Vec<_> = (0..count).collect();
+            let (rows, unknown, truncated) = super::gh_files_top_up_or_unknown(
+                vec![0; 100],
+                Some(Ok::<_, ()>(expected.clone())),
+            );
+            assert_eq!(rows, expected);
+            assert_eq!((unknown, truncated), (count == 3000, count == 3000));
         }
     }
 
